@@ -1,31 +1,23 @@
 {
-  "name": "newbak",
+  "name": "ecommerce-api",
   "version": "1.0.0",
+  "description": "E-commerce API for Vercel",
   "main": "index.js",
-  "engines": {
-    "node": "18.x"
-  },
   "scripts": {
     "start": "node index.js",
-    "dev": "node index.js",
-    "init": "node init.js",
-    "vercel-build": "echo 'Building for Vercel...'",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "nodemon index.js"
   },
-  "keywords": ["ecommerce", "api", "serverless"],
-  "author": "",
-  "license": "ISC",
-  "description": "E-commerce API optimized for Vercel serverless deployment",
   "dependencies": {
-    "bcryptjs": "^2.4.3",
-    "cors": "^2.8.5",
-    "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "jsonwebtoken": "^9.0.2",
-    "multer": "^1.4.5-lts.1",
-    "pg": "^8.11.3",
-    "serverless-http": "^3.2.0"
+    "cors": "^2.8.5",
+    "multer": "^1.4.5",
+    "serverless-http": "^3.2.0",
+    "pg": "^8.11.0"
   },
-  "devDependencies": {},
-  "optionalDependencies": {}
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }
