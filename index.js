@@ -2,8 +2,11 @@
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
-const { pool } = require('../config/database');
-const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const path = require('path');
+
+// Use absolute paths to avoid Vercel serverless issues
+const { pool } = require(path.join(process.cwd(), 'config/database'));
+const { authenticateToken, requireAdmin } = require(path.join(process.cwd(), 'middleware/auth'));
 
 const app = express();
 
@@ -11,7 +14,7 @@ const app = express();
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 4.5 * 1024 * 1024, // 4.5MB limit for serverless (lower than 5MB due to response limits)
+    fileSize: 4.5 * 1024 * 1024, // 4.5MB limit
   },
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) {
@@ -45,8 +48,7 @@ app.post('/upload/image', authenticateToken, requireAdmin, upload.single('image'
     }
 
     const imageBuffer = req.file.buffer;
-    
-    // Initialize database connection if not already done
+
     try {
       await pool.query('SELECT 1');
     } catch (dbError) {
@@ -68,7 +70,7 @@ app.post('/upload/image', authenticateToken, requireAdmin, upload.single('image'
     });
   } catch (error) {
     console.error('Image upload error:', error);
-    
+
     if (error instanceof multer.MulterError) {
       if (error.code === 'LIMIT_FILE_SIZE') {
         return res.status(400).json({
@@ -77,7 +79,7 @@ app.post('/upload/image', authenticateToken, requireAdmin, upload.single('image'
         });
       }
     }
-    
+
     res.status(500).json({
       error: 'Server error',
       message: 'An error occurred while uploading the image'
@@ -89,8 +91,7 @@ app.post('/upload/image', authenticateToken, requireAdmin, upload.single('image'
 app.get('/image/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    
-    // Initialize database connection if not already done
+
     try {
       await pool.query('SELECT 1');
     } catch (dbError) {
@@ -114,12 +115,11 @@ app.get('/image/:id', async (req, res) => {
     }
 
     const { image_data, mime_type } = result.rows[0];
-    
-    // Set appropriate headers
+
     res.set('Content-Type', mime_type);
     res.set('Cache-Control', 'public, max-age=31536000');
     res.set('Content-Length', image_data.length);
-    
+
     res.send(image_data);
   } catch (error) {
     console.error('Get image error:', error);
@@ -130,12 +130,12 @@ app.get('/image/:id', async (req, res) => {
   }
 });
 
-// Import and use other routes
+// Import and use other routes with absolute paths
 try {
-  const authRoutes = require('../routes/auth');
-  const productRoutes = require('../routes/products');
-  const reviewRoutes = require('../routes/reviews');
-  const orderRoutes = require('../routes/orders');
+  const authRoutes = require(path.join(process.cwd(), 'routes/auth'));
+  const productRoutes = require(path.join(process.cwd(), 'routes/products'));
+  const reviewRoutes = require(path.join(process.cwd(), 'routes/reviews'));
+  const orderRoutes = require(path.join(process.cwd(), 'routes/orders'));
 
   app.use('/auth', authRoutes);
   app.use('/products', productRoutes);
@@ -165,7 +165,7 @@ app.get('/', (req, res) => {
 // Error handling middleware
 app.use((error, req, res, next) => {
   console.error('Error occurred:', error);
-  
+
   if (error instanceof multer.MulterError) {
     if (error.code === 'LIMIT_FILE_SIZE') {
       return res.status(400).json({
@@ -180,7 +180,7 @@ app.use((error, req, res, next) => {
       });
     }
   }
-  
+
   if (error.message === 'Only image files are allowed') {
     return res.status(400).json({
       error: 'Invalid file type',
