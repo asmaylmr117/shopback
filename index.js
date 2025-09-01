@@ -3,7 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const { pool } = require('./config/database');
-const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { authenticateToken, requireAdmin } = require('./middleware/auth');
 
 const app = express();
 
