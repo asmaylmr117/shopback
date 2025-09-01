@@ -6,16 +6,24 @@ const { authenticateToken, requireAdmin } = require('./middleware/auth');
 
 const app = express();
 
-// Configure multer for serverless environment with stricter limits
+// Configure multer for Vercel with strict limits
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 4 * 1024 * 1024, // Reduced to 4MB for safety
+    fileSize: 4 * 1024 * 1024, // 4MB - safe for Vercel
     files: 1,
     fields: 10,
-    fieldSize: 1024 * 1024, // 1MB per field
+    fieldNameSize: 100,
+    fieldSize: 1024 * 1024,
   },
   fileFilter: (req, file, cb) => {
+    console.log('File received:', {
+      fieldname: file.fieldname,
+      originalname: file.originalname,
+      mimetype: file.mimetype,
+      size: file.size
+    });
+    
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
     } else {
@@ -24,22 +32,32 @@ const upload = multer({
   }
 });
 
-// Middleware with consistent size limits
+// CORS configuration
 app.use(cors({
   origin: process.env.NODE_ENV === 'production' 
     ? ['https://yourfrontenddomain.com', 'https://yourfrontenddomain.vercel.app']
-    : '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  credentials: true
+    : true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  credentials: true,
+  maxAge: 86400 // 24 hours
 }));
 
-// Reduce body parser limits to match serverless constraints
+// Handle preflight requests
+app.options('*', cors());
+
+// Body parser with size verification
 app.use(express.json({ 
   limit: '4mb',
-  verify: (req, res, buf) => {
-    // Verify content-length matches actual body size
+  verify: (req, res, buf, encoding) => {
     const contentLength = parseInt(req.get('Content-Length') || '0');
-    if (contentLength > 0 && buf.length !== contentLength) {
+    console.log('JSON body verification:', {
+      contentLength,
+      bufferLength: buf.length,
+      encoding
+    });
+    
+    if (contentLength > 0 && Math.abs(buf.length - contentLength) > 10) {
+      console.error('Content-Length mismatch:', { contentLength, bufferLength: buf.length });
       throw new Error('Request size mismatch');
     }
   }
@@ -48,48 +66,121 @@ app.use(express.json({
 app.use(express.urlencoded({ 
   extended: true, 
   limit: '4mb',
-  verify: (req, res, buf) => {
+  verify: (req, res, buf, encoding) => {
     const contentLength = parseInt(req.get('Content-Length') || '0');
-    if (contentLength > 0 && buf.length !== contentLength) {
+    console.log('URL-encoded body verification:', {
+      contentLength,
+      bufferLength: buf.length,
+      encoding
+    });
+    
+    if (contentLength > 0 && Math.abs(buf.length - contentLength) > 10) {
+      console.error('Content-Length mismatch:', { contentLength, bufferLength: buf.length });
       throw new Error('Request size mismatch');
     }
   }
 }));
 
-// Add request logging middleware for debugging
+// Enhanced request logging
 app.use((req, res, next) => {
-  console.log(`${req.method} ${req.path} - Content-Length: ${req.get('Content-Length') || 'none'}`);
+  console.log('Incoming request:', {
+    method: req.method,
+    url: req.url,
+    path: req.path,
+    contentType: req.get('Content-Type'),
+    contentLength: req.get('Content-Length'),
+    userAgent: req.get('User-Agent'),
+    timestamp: new Date().toISOString()
+  });
+  
+  // Set timeout for long-running requests
+  req.setTimeout(25000, () => {
+    console.error('Request timeout');
+    res.status(408).json({ error: 'Request timeout' });
+  });
+  
   next();
 });
 
-// Image upload endpoint with enhanced error handling
-app.post('/upload/image', authenticateToken, requireAdmin, (req, res, next) => {
-  upload.single('image')(req, res, (err) => {
-    if (err) {
-      console.error('Multer error:', err);
-      if (err instanceof multer.MulterError) {
-        if (err.code === 'LIMIT_FILE_SIZE') {
-          return res.status(400).json({
-            error: 'File too large',
-            message: 'Image size must be less than 4MB for serverless deployment'
-          });
-        }
-        if (err.code === 'LIMIT_UNEXPECTED_FILE') {
-          return res.status(400).json({
-            error: 'Invalid file',
-            message: 'Only one image file is allowed'
-          });
-        }
-      }
-      return res.status(400).json({
-        error: 'Upload error',
-        message: err.message
-      });
+// Health check - must be before other routes
+app.get('/', (req, res) => {
+  res.json({ 
+    message: 'E-commerce API Server is running on Vercel!',
+    version: '1.0.0',
+    environment: 'serverless',
+    timestamp: new Date().toISOString(),
+    memory: process.memoryUsage(),
+    uptime: process.uptime(),
+    limits: {
+      maxFileSize: '4MB',
+      maxRequestSize: '4MB'
+    },
+    endpoints: {
+      auth: '/auth',
+      products: '/products',
+      reviews: '/reviews',
+      orders: '/orders',
+      upload: '/upload/image',
+      image: '/image/:id'
     }
-    next();
+  });
+});
+
+// Image upload endpoint with comprehensive error handling
+app.post('/upload/image', (req, res, next) => {
+  console.log('Upload request started');
+  
+  // Apply authentication middleware
+  authenticateToken(req, res, (authErr) => {
+    if (authErr) return next(authErr);
+    
+    requireAdmin(req, res, (adminErr) => {
+      if (adminErr) return next(adminErr);
+      
+      // Apply multer middleware
+      upload.single('image')(req, res, (uploadErr) => {
+        if (uploadErr) {
+          console.error('Multer error:', uploadErr);
+          
+          if (uploadErr instanceof multer.MulterError) {
+            switch (uploadErr.code) {
+              case 'LIMIT_FILE_SIZE':
+                return res.status(400).json({
+                  error: 'File too large',
+                  message: 'Image size must be less than 4MB'
+                });
+              case 'LIMIT_UNEXPECTED_FILE':
+                return res.status(400).json({
+                  error: 'Unexpected field',
+                  message: 'Only one image file is allowed in the "image" field'
+                });
+              case 'LIMIT_FIELD_COUNT':
+                return res.status(400).json({
+                  error: 'Too many fields',
+                  message: 'Maximum 10 form fields allowed'
+                });
+              default:
+                return res.status(400).json({
+                  error: 'Upload error',
+                  message: uploadErr.message
+                });
+            }
+          }
+          
+          return res.status(400).json({
+            error: 'Upload error',
+            message: uploadErr.message
+          });
+        }
+        
+        next();
+      });
+    });
   });
 }, async (req, res) => {
   try {
+    console.log('Processing uploaded file');
+    
     if (!req.file) {
       return res.status(400).json({
         error: 'Validation error',
@@ -98,8 +189,13 @@ app.post('/upload/image', authenticateToken, requireAdmin, (req, res, next) => {
     }
 
     const imageBuffer = req.file.buffer;
+    console.log('File processed:', {
+      size: imageBuffer.length,
+      mimetype: req.file.mimetype,
+      originalName: req.file.originalname
+    });
     
-    // Validate buffer size
+    // Double-check buffer size
     if (imageBuffer.length > 4 * 1024 * 1024) {
       return res.status(400).json({
         error: 'File too large',
@@ -107,9 +203,10 @@ app.post('/upload/image', authenticateToken, requireAdmin, (req, res, next) => {
       });
     }
     
-    // Initialize database connection if not already done
+    // Test database connection
     try {
       await pool.query('SELECT 1');
+      console.log('Database connection successful');
     } catch (dbError) {
       console.error('Database connection failed:', dbError);
       return res.status(500).json({
@@ -118,31 +215,34 @@ app.post('/upload/image', authenticateToken, requireAdmin, (req, res, next) => {
       });
     }
 
+    // Insert image
     const result = await pool.query(
       'INSERT INTO product_images (image_data, mime_type, file_size) VALUES ($1, $2, $3) RETURNING id',
       [imageBuffer, req.file.mimetype, req.file.size]
     );
 
+    console.log('Image saved with ID:', result.rows[0].id);
+    
     res.status(201).json({
       message: 'Image uploaded successfully',
       imageId: result.rows[0].id
     });
   } catch (error) {
-    console.error('Image upload error:', error);
+    console.error('Image upload processing error:', error);
     
     res.status(500).json({
       error: 'Server error',
-      message: 'An error occurred while uploading the image'
+      message: 'An error occurred while processing the image'
     });
   }
 });
 
-// Serve images with better error handling
+// Serve images
 app.get('/image/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    console.log('Image request for ID:', id);
     
-    // Validate ID parameter
     if (!id || isNaN(parseInt(id))) {
       return res.status(400).json({
         error: 'Invalid ID',
@@ -150,7 +250,6 @@ app.get('/image/:id', async (req, res) => {
       });
     }
     
-    // Initialize database connection if not already done
     try {
       await pool.query('SELECT 1');
     } catch (dbError) {
@@ -175,10 +274,12 @@ app.get('/image/:id', async (req, res) => {
 
     const { image_data, mime_type } = result.rows[0];
     
-    // Set appropriate headers
-    res.set('Content-Type', mime_type);
-    res.set('Cache-Control', 'public, max-age=31536000');
-    res.set('Content-Length', image_data.length);
+    res.set({
+      'Content-Type': mime_type,
+      'Cache-Control': 'public, max-age=31536000',
+      'Content-Length': image_data.length.toString(),
+      'ETag': `"${id}-${image_data.length}"`
+    });
     
     res.send(image_data);
   } catch (error) {
@@ -190,61 +291,48 @@ app.get('/image/:id', async (req, res) => {
   }
 });
 
-// Import and use other routes with error handling
-try {
-  const authRoutes = require('./routes/auth');
-  const productRoutes = require('./routes/products');
-  const reviewRoutes = require('./routes/reviews');
-  const orderRoutes = require('./routes/orders');
+// Load other routes with better error handling
+const routeModules = [
+  { path: '/auth', module: './routes/auth' },
+  { path: '/products', module: './routes/products' },
+  { path: '/reviews', module: './routes/reviews' },
+  { path: '/orders', module: './routes/orders' }
+];
 
-  app.use('/auth', authRoutes);
-  app.use('/products', productRoutes);
-  app.use('/reviews', reviewRoutes);
-  app.use('/orders', orderRoutes);
-} catch (routeError) {
-  console.error('Error loading routes:', routeError);
-}
-
-// Health check endpoint
-app.get('/', (req, res) => {
-  res.json({ 
-    message: 'E-commerce API Server is running on Vercel!',
-    version: '1.0.0',
-    environment: 'serverless',
-    timestamp: new Date().toISOString(),
-    limits: {
-      maxFileSize: '4MB',
-      maxRequestSize: '4MB'
-    },
-    endpoints: {
-      auth: '/api/auth',
-      products: '/api/products',
-      reviews: '/api/reviews',
-      orders: '/api/orders',
-      upload: '/api/upload/image',
-      image: '/api/image/:id'
-    }
-  });
+routeModules.forEach(({ path, module }) => {
+  try {
+    const routes = require(module);
+    app.use(path, routes);
+    console.log(`Loaded routes: ${path}`);
+  } catch (routeError) {
+    console.error(`Error loading ${path} routes:`, routeError);
+  }
 });
 
-// Handle favicon requests
+// Handle favicon
 app.get('/favicon.ico', (req, res) => {
   res.status(204).end();
 });
 
-// Catch-all for undefined routes
+// 404 handler
 app.use('*', (req, res) => {
+  console.log('Route not found:', req.originalUrl);
   res.status(404).json({
     error: 'Route not found',
     message: `The endpoint ${req.method} ${req.originalUrl} does not exist`
   });
 });
 
-// Error handling middleware
+// Global error handler
 app.use((error, req, res, next) => {
-  console.error('Error occurred:', error);
+  console.error('Global error handler:', {
+    message: error.message,
+    stack: error.stack,
+    url: req.originalUrl,
+    method: req.method
+  });
   
-  // Handle request size mismatch specifically
+  // Handle specific error types
   if (error.message === 'Request size mismatch') {
     return res.status(400).json({
       error: 'Request size mismatch',
@@ -252,29 +340,13 @@ app.use((error, req, res, next) => {
     });
   }
   
-  if (error instanceof multer.MulterError) {
-    if (error.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({
-        error: 'File too large',
-        message: 'Image size must be less than 4MB'
-      });
-    }
-    if (error.code === 'LIMIT_UNEXPECTED_FILE') {
-      return res.status(400).json({
-        error: 'Invalid file',
-        message: 'Only one image file is allowed'
-      });
-    }
-  }
-  
-  if (error.message === 'Only image files are allowed') {
-    return res.status(400).json({
-      error: 'Invalid file type',
-      message: 'Only image files are allowed'
+  if (error.code === 'EBADCSRFTOKEN') {
+    return res.status(403).json({
+      error: 'Invalid CSRF token',
+      message: 'Request forbidden'
     });
   }
-
-  // Handle JSON parsing errors
+  
   if (error instanceof SyntaxError && error.status === 400 && 'body' in error) {
     return res.status(400).json({
       error: 'Invalid JSON',
@@ -284,9 +356,20 @@ app.use((error, req, res, next) => {
 
   res.status(500).json({ 
     error: 'Internal server error',
-    message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
+    message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong',
+    requestId: req.headers['x-vercel-id'] || 'unknown'
   });
 });
 
-const serverless = require('serverless-http');
-module.exports = serverless(app);
+// For Vercel deployment
+if (process.env.NODE_ENV === 'production') {
+  const serverless = require('serverless-http');
+  module.exports = serverless(app);
+} else {
+  // For local development
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+  module.exports = app;
+}
