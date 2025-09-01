@@ -1,15 +1,28 @@
 const express = require('express');
 const { pool } = require('../config/database');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
-
+const multer = require('multer'); 
 const router = express.Router();
 
-// IMPORTANT: Put specific routes BEFORE parameterized routes
+// Configure multer to store files in memory
+const storage = multer.memoryStorage();
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // Limit file size to 5MB
+  fileFilter: (req, file, cb) => {
+    const filetypes = /jpeg|jpg|png/;
+    const mimetype = filetypes.test(file.mimetype);
+    if (mimetype) {
+      return cb(null, true);
+    }
+    cb(new Error('Invalid file type. Only JPEG and PNG are allowed.'));
+  }
+});
+
 // Get product categories (public route)
 router.get('/meta/categories', async (req, res) => {
   try {
     const result = await pool.query('SELECT DISTINCT category FROM products WHERE category IS NOT NULL ORDER BY category');
-    
     res.json({
       message: 'Categories retrieved successfully',
       categories: result.rows.map(row => row.category)
@@ -32,7 +45,6 @@ router.get('/meta/types', async (req, res) => {
       SELECT DISTINCT type2 FROM products WHERE type2 IS NOT NULL AND type2 != 'All'
       ORDER BY type
     `);
-    
     res.json({
       message: 'Types retrieved successfully',
       types: result.rows.map(row => row.type)
@@ -55,7 +67,6 @@ router.get('/meta/styles', async (req, res) => {
       SELECT DISTINCT style2 FROM products WHERE style2 IS NOT NULL AND style2 != ''
       ORDER BY style
     `);
-    
     res.json({
       message: 'Styles retrieved successfully',
       styles: result.rows.map(row => row.style)
@@ -76,7 +87,7 @@ router.get('/category/:category', async (req, res) => {
     const { limit = 10 } = req.query;
 
     const result = await pool.query(
-      'SELECT * FROM products WHERE category = $1 ORDER BY created_at DESC LIMIT $2',
+      'SELECT id, name, description, price, discount, stars, category, style, style2, type, type2, stock_quantity, created_at, updated_at, encode(image_data, \'base64\') AS image_data FROM products WHERE category = $1 ORDER BY created_at DESC LIMIT $2',
       [category, limit]
     );
 
@@ -98,12 +109,10 @@ router.get('/category/:category', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     const { category, type, style, search, page = 1, limit = 20 } = req.query;
-    
-    let query = 'SELECT * FROM products WHERE 1=1';
+    let query = 'SELECT id, name, description, price, discount, stars, category, style, style2, type, type2, stock_quantity, created_at, updated_at, encode(image_data, \'base64\') AS image_data FROM products WHERE 1=1';
     let queryParams = [];
     let paramCount = 0;
 
-    // Add filters
     if (category) {
       paramCount++;
       query += ` AND category = $${paramCount}`;
@@ -128,19 +137,16 @@ router.get('/', async (req, res) => {
       queryParams.push(`%${search}%`);
     }
 
-    // Add pagination
     const offset = (page - 1) * limit;
     paramCount++;
     query += ` ORDER BY created_at DESC LIMIT $${paramCount}`;
     queryParams.push(limit);
-    
     paramCount++;
     query += ` OFFSET $${paramCount}`;
     queryParams.push(offset);
 
     const result = await pool.query(query, queryParams);
 
-    // Get total count for pagination
     let countQuery = 'SELECT COUNT(*) FROM products WHERE 1=1';
     let countParams = [];
     let countParamCount = 0;
@@ -193,12 +199,14 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Get product by ID (public route) - MUST come after specific routes
+// Get product by ID (public route)
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-
-    const result = await pool.query('SELECT * FROM products WHERE id = $1', [id]);
+    const result = await pool.query(
+      'SELECT id, name, description, price, discount, stars, category, style, style2, type, type2, stock_quantity, created_at, updated_at, encode(image_data, \'base64\') AS image_data FROM products WHERE id = $1',
+      [id]
+    );
 
     if (result.rows.length === 0) {
       return res.status(404).json({
@@ -221,7 +229,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // Add new product (admin only)
-router.post('/', authenticateToken, requireAdmin, async (req, res) => {
+router.post('/', authenticateToken, requireAdmin, upload.single('image'), async (req, res) => {
   try {
     const {
       name,
@@ -234,11 +242,11 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
       style2,
       type,
       type2,
-      image_url,
       stock_quantity = 0
     } = req.body;
 
-    // Validate required fields
+    const imageData = req.file ? req.file.buffer : null;
+
     if (!name || !price || !category || !type) {
       return res.status(400).json({
         error: 'Validation error',
@@ -247,10 +255,10 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
     }
 
     const result = await pool.query(`
-      INSERT INTO products (name, description, price, discount, stars, category, style, style2, type, type2, image_url, stock_quantity)
+      INSERT INTO products (name, description, price, discount, stars, category, style, style2, type, type2, image_data, stock_quantity)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-      RETURNING *
-    `, [name, description, price, discount, stars, category, style, style2, type, type2, image_url, stock_quantity]);
+      RETURNING id, name, description, price, discount, stars, category, style, style2, type, type2, stock_quantity, created_at, updated_at, encode(image_data, 'base64') AS image_data
+    `, [name, description, price, discount, stars, category, style, style2, type, type2, imageData, stock_quantity]);
 
     res.status(201).json({
       message: 'Product created successfully',
@@ -266,7 +274,7 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
 });
 
 // Update product (admin only)
-router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
+router.put('/:id', authenticateToken, requireAdmin, upload.single('image'), async (req, res) => {
   try {
     const { id } = req.params;
     const {
@@ -280,13 +288,12 @@ router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
       style2,
       type,
       type2,
-      image_url,
       stock_quantity
     } = req.body;
 
-    // Check if product exists
+    const imageData = req.file ? req.file.buffer : undefined;
+
     const existingProduct = await pool.query('SELECT * FROM products WHERE id = $1', [id]);
-    
     if (existingProduct.rows.length === 0) {
       return res.status(404).json({
         error: 'Product not found',
@@ -294,14 +301,23 @@ router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
       });
     }
 
-    // Build update query dynamically
     let updateFields = [];
     let queryParams = [];
     let paramCount = 0;
 
     const fields = {
-      name, description, price, discount, stars, category, 
-      style, style2, type, type2, image_url, stock_quantity
+      name,
+      description,
+      price,
+      discount,
+      stars,
+      category,
+      style,
+      style2,
+      type,
+      type2,
+      image_data: imageData,
+      stock_quantity
     };
 
     Object.entries(fields).forEach(([key, value]) => {
@@ -319,12 +335,10 @@ router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
       });
     }
 
-    // Add updated_at field
     paramCount++;
     updateFields.push(`updated_at = $${paramCount}`);
     queryParams.push(new Date());
 
-    // Add product ID for WHERE clause
     paramCount++;
     queryParams.push(id);
 
@@ -332,7 +346,7 @@ router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
       UPDATE products 
       SET ${updateFields.join(', ')}
       WHERE id = $${paramCount}
-      RETURNING *
+      RETURNING id, name, description, price, discount, stars, category, style, style2, type, type2, stock_quantity, created_at, updated_at, encode(image_data, 'base64') AS image_data
     `;
 
     const result = await pool.query(query, queryParams);
@@ -355,9 +369,7 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Check if product exists
     const existingProduct = await pool.query('SELECT * FROM products WHERE id = $1', [id]);
-    
     if (existingProduct.rows.length === 0) {
       return res.status(404).json({
         error: 'Product not found',
