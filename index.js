@@ -1,22 +1,17 @@
+// api/index.js - Main serverless function for Vercel
 const express = require('express');
 const cors = require('cors');
-const dotenv = require('dotenv');
 const multer = require('multer');
-const { initializeDatabase, pool } = require('./config/database');
-const { authenticateToken, requireAdmin } = require('./middleware/auth');
-
-// Load environment variables
-dotenv.config();
+const { pool } = require('../config/database');
+const { authenticateToken, requireAdmin } = require('../middleware/auth');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
 
-// Configure multer for image uploads
-const storage = multer.memoryStorage();
+// Configure multer for serverless environment
 const upload = multer({
-  storage: storage,
+  storage: multer.memoryStorage(),
   limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB limit
+    fileSize: 4.5 * 1024 * 1024, // 4.5MB limit for serverless (lower than 5MB due to response limits)
   },
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) {
@@ -29,15 +24,18 @@ const upload = multer({
 
 // Middleware
 app.use(cors({
-  origin: '*', 
+  origin: process.env.NODE_ENV === 'production' 
+    ? ['https://yourfrontenddomain.com', 'https://yourfrontenddomain.vercel.app']
+    : '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true
 }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
-// Image upload routes - Add these before other routes
-app.post('/api/upload/image', authenticateToken, requireAdmin, upload.single('image'), async (req, res) => {
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Image upload endpoint
+app.post('/upload/image', authenticateToken, requireAdmin, upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -47,6 +45,18 @@ app.post('/api/upload/image', authenticateToken, requireAdmin, upload.single('im
     }
 
     const imageBuffer = req.file.buffer;
+    
+    // Initialize database connection if not already done
+    try {
+      await pool.query('SELECT 1');
+    } catch (dbError) {
+      console.error('Database connection failed:', dbError);
+      return res.status(500).json({
+        error: 'Database error',
+        message: 'Could not connect to database'
+      });
+    }
+
     const result = await pool.query(
       'INSERT INTO product_images (image_data, mime_type, file_size) VALUES ($1, $2, $3) RETURNING id',
       [imageBuffer, req.file.mimetype, req.file.size]
@@ -58,14 +68,16 @@ app.post('/api/upload/image', authenticateToken, requireAdmin, upload.single('im
     });
   } catch (error) {
     console.error('Image upload error:', error);
+    
     if (error instanceof multer.MulterError) {
       if (error.code === 'LIMIT_FILE_SIZE') {
         return res.status(400).json({
           error: 'File too large',
-          message: 'Image size must be less than 5MB'
+          message: 'Image size must be less than 4.5MB for serverless deployment'
         });
       }
     }
+    
     res.status(500).json({
       error: 'Server error',
       message: 'An error occurred while uploading the image'
@@ -74,10 +86,25 @@ app.post('/api/upload/image', authenticateToken, requireAdmin, upload.single('im
 });
 
 // Serve images
-app.get('/api/image/:id', async (req, res) => {
+app.get('/image/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const result = await pool.query('SELECT image_data, mime_type FROM product_images WHERE id = $1', [id]);
+    
+    // Initialize database connection if not already done
+    try {
+      await pool.query('SELECT 1');
+    } catch (dbError) {
+      console.error('Database connection failed:', dbError);
+      return res.status(500).json({
+        error: 'Database error',
+        message: 'Could not connect to database'
+      });
+    }
+
+    const result = await pool.query(
+      'SELECT image_data, mime_type FROM product_images WHERE id = $1', 
+      [id]
+    );
 
     if (result.rows.length === 0) {
       return res.status(404).json({
@@ -87,8 +114,12 @@ app.get('/api/image/:id', async (req, res) => {
     }
 
     const { image_data, mime_type } = result.rows[0];
+    
+    // Set appropriate headers
     res.set('Content-Type', mime_type);
-    res.set('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+    res.set('Cache-Control', 'public, max-age=31536000');
+    res.set('Content-Length', image_data.length);
+    
     res.send(image_data);
   } catch (error) {
     console.error('Get image error:', error);
@@ -99,11 +130,27 @@ app.get('/api/image/:id', async (req, res) => {
   }
 });
 
-// Main route
+// Import and use other routes
+try {
+  const authRoutes = require('../routes/auth');
+  const productRoutes = require('../routes/products');
+  const reviewRoutes = require('../routes/reviews');
+  const orderRoutes = require('../routes/orders');
+
+  app.use('/auth', authRoutes);
+  app.use('/products', productRoutes);
+  app.use('/reviews', reviewRoutes);
+  app.use('/orders', orderRoutes);
+} catch (routeError) {
+  console.error('Error loading routes:', routeError);
+}
+
+// Health check endpoint
 app.get('/', (req, res) => {
   res.json({ 
-    message: 'E-commerce API Server is running!',
+    message: 'E-commerce API Server is running on Vercel!',
     version: '1.0.0',
+    environment: 'serverless',
     endpoints: {
       auth: '/api/auth',
       products: '/api/products',
@@ -115,45 +162,15 @@ app.get('/', (req, res) => {
   });
 });
 
-// Import route modules - Let's test each one individually
-console.log('Loading auth routes...');
-const authRoutes = require('./routes/auth');
-console.log('Auth routes loaded successfully');
-
-console.log('Loading product routes...');
-const productRoutes = require('./routes/products');
-console.log('Product routes loaded successfully');
-
-console.log('Loading review routes...');
-const reviewRoutes = require('./routes/reviews');
-console.log('Review routes loaded successfully');
-
-console.log('Loading order routes...');
-const orderRoutes = require('./routes/orders');
-console.log('Order routes loaded successfully');
-
-// Use routes - Comment out one by one to identify the problematic route
-console.log('Registering auth routes...');
-app.use('/api/auth', authRoutes);
-
-console.log('Registering product routes...');
-app.use('/api/products', productRoutes);
-
-console.log('Registering review routes...');
-app.use('/api/reviews', reviewRoutes);
-
-console.log('Registering order routes...');
-app.use('/api/orders', orderRoutes);
-
-console.log('All routes registered successfully');
-
-// Error handling middleware for multer and general errors
+// Error handling middleware
 app.use((error, req, res, next) => {
+  console.error('Error occurred:', error);
+  
   if (error instanceof multer.MulterError) {
     if (error.code === 'LIMIT_FILE_SIZE') {
       return res.status(400).json({
         error: 'File too large',
-        message: 'Image size must be less than 5MB'
+        message: 'Image size must be less than 4.5MB'
       });
     }
     if (error.code === 'LIMIT_UNEXPECTED_FILE') {
@@ -171,35 +188,18 @@ app.use((error, req, res, next) => {
     });
   }
 
-  console.error(error.stack);
   res.status(500).json({ 
-    error: 'Something went wrong!',
-    message: error.message 
+    error: 'Internal server error',
+    message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
   });
 });
 
-// Start server
-const startServer = async () => {
-  try {
-    // Initialize database
-    console.log('Initializing database...');
-    await initializeDatabase();
-    console.log('Database initialized successfully');
-    
-    // Start the server
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`Server is running on port ${PORT}`);
-      console.log(`Access the API at: http://localhost:${PORT}`);
-      console.log('Image upload endpoint: POST /api/upload/image');
-      console.log('Image serve endpoint: GET /api/image/:id');
-      console.log('API Documentation: Check README.md for detailed API usage');
-    });
-  } catch (error) {
-    console.error('Failed to start server:', error);
-    process.exit(1);
-  }
-};
-
-startServer();
+// Handle 404s
+app.use('*', (req, res) => {
+  res.status(404).json({
+    error: 'Not found',
+    message: 'The requested endpoint does not exist'
+  });
+});
 
 module.exports = app;
