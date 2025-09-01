@@ -1,13 +1,12 @@
+
 const { Pool } = require('pg');
 require('dotenv').config();
 
-// Create a new pool instance
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
-// Test database connection
 pool.on('connect', () => {
   console.log('Connected to PostgreSQL database');
 });
@@ -16,7 +15,6 @@ pool.on('error', (err) => {
   console.error('Database connection error:', err);
 });
 
-// Database initialization function
 const initializeDatabase = async () => {
   try {
     // Create users table
@@ -32,7 +30,7 @@ const initializeDatabase = async () => {
       )
     `);
 
-    // Create products table
+    // Create products table with image_data as BYTEA
     await pool.query(`
       CREATE TABLE IF NOT EXISTS products (
         id SERIAL PRIMARY KEY,
@@ -46,7 +44,7 @@ const initializeDatabase = async () => {
         style2 VARCHAR(100),
         type VARCHAR(100),
         type2 VARCHAR(100),
-        image_url VARCHAR(500),
+        image_data BYTEA, -- Changed from image_url VARCHAR(500)
         stock_quantity INTEGER DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
