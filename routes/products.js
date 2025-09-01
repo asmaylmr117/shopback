@@ -1,8 +1,79 @@
 const express = require('express');
+const multer = require('multer');
 const { pool } = require('../config/database');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
+
+// Configure multer for image uploads
+const storage = multer.memoryStorage();
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed'), false);
+    }
+  }
+});
+
+// Image upload endpoint
+router.post('/upload/image', authenticateToken, requireAdmin, upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        error: 'Validation error',
+        message: 'No image file uploaded'
+      });
+    }
+
+    const imageBuffer = req.file.buffer;
+    const result = await pool.query(
+      'INSERT INTO product_images (image_data, mime_type, file_size) VALUES ($1, $2, $3) RETURNING id',
+      [imageBuffer, req.file.mimetype, req.file.size]
+    );
+
+    res.status(201).json({
+      message: 'Image uploaded successfully',
+      imageId: result.rows[0].id
+    });
+  } catch (error) {
+    console.error('Image upload error:', error);
+    res.status(500).json({
+      error: 'Server error',
+      message: 'An error occurred while uploading the image'
+    });
+  }
+});
+
+// Get image by ID
+router.get('/image/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query('SELECT image_data, mime_type FROM product_images WHERE id = $1', [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: 'Image not found',
+        message: 'Image with the specified ID does not exist'
+      });
+    }
+
+    const { image_data, mime_type } = result.rows[0];
+    res.set('Content-Type', mime_type);
+    res.send(image_data);
+  } catch (error) {
+    console.error('Get image error:', error);
+    res.status(500).json({
+      error: 'Server error',
+      message: 'An error occurred while retrieving the image'
+    });
+  }
+});
 
 // IMPORTANT: Put specific routes BEFORE parameterized routes
 // Get product categories (public route)
@@ -75,14 +146,24 @@ router.get('/category/:category', async (req, res) => {
     const { category } = req.params;
     const { limit = 10 } = req.query;
 
-    const result = await pool.query(
-      'SELECT * FROM products WHERE category = $1 ORDER BY created_at DESC LIMIT $2',
-      [category, limit]
-    );
+    const result = await pool.query(`
+      SELECT p.*, pi.image_data 
+      FROM products p 
+      LEFT JOIN product_images pi ON p.image_id = pi.id 
+      WHERE p.category = $1 
+      ORDER BY p.created_at DESC 
+      LIMIT $2
+    `, [category, limit]);
+
+    // Convert image data to base64 if exists
+    const products = result.rows.map(product => ({
+      ...product,
+      image_data: product.image_data ? product.image_data.toString('base64') : null
+    }));
 
     res.json({
       message: `${category} products retrieved successfully`,
-      products: result.rows,
+      products,
       category
     });
   } catch (error) {
@@ -99,39 +180,44 @@ router.get('/', async (req, res) => {
   try {
     const { category, type, style, search, page = 1, limit = 20 } = req.query;
     
-    let query = 'SELECT * FROM products WHERE 1=1';
+    let query = `
+      SELECT p.*, pi.image_data 
+      FROM products p 
+      LEFT JOIN product_images pi ON p.image_id = pi.id 
+      WHERE 1=1
+    `;
     let queryParams = [];
     let paramCount = 0;
 
     // Add filters
     if (category) {
       paramCount++;
-      query += ` AND category = $${paramCount}`;
+      query += ` AND p.category = $${paramCount}`;
       queryParams.push(category);
     }
 
     if (type) {
       paramCount++;
-      query += ` AND (type = $${paramCount} OR type2 = $${paramCount})`;
+      query += ` AND (p.type = $${paramCount} OR p.type2 = $${paramCount})`;
       queryParams.push(type);
     }
 
     if (style) {
       paramCount++;
-      query += ` AND (style = $${paramCount} OR style2 = $${paramCount})`;
+      query += ` AND (p.style = $${paramCount} OR p.style2 = $${paramCount})`;
       queryParams.push(style);
     }
 
     if (search) {
       paramCount++;
-      query += ` AND name ILIKE $${paramCount}`;
+      query += ` AND p.name ILIKE $${paramCount}`;
       queryParams.push(`%${search}%`);
     }
 
     // Add pagination
     const offset = (page - 1) * limit;
     paramCount++;
-    query += ` ORDER BY created_at DESC LIMIT $${paramCount}`;
+    query += ` ORDER BY p.created_at DESC LIMIT $${paramCount}`;
     queryParams.push(limit);
     
     paramCount++;
@@ -140,32 +226,38 @@ router.get('/', async (req, res) => {
 
     const result = await pool.query(query, queryParams);
 
+    // Convert image data to base64 if exists
+    const products = result.rows.map(product => ({
+      ...product,
+      image_data: product.image_data ? product.image_data.toString('base64') : null
+    }));
+
     // Get total count for pagination
-    let countQuery = 'SELECT COUNT(*) FROM products WHERE 1=1';
+    let countQuery = 'SELECT COUNT(*) FROM products p WHERE 1=1';
     let countParams = [];
     let countParamCount = 0;
 
     if (category) {
       countParamCount++;
-      countQuery += ` AND category = $${countParamCount}`;
+      countQuery += ` AND p.category = $${countParamCount}`;
       countParams.push(category);
     }
 
     if (type) {
       countParamCount++;
-      countQuery += ` AND (type = $${countParamCount} OR type2 = $${countParamCount})`;
+      countQuery += ` AND (p.type = $${countParamCount} OR p.type2 = $${countParamCount})`;
       countParams.push(type);
     }
 
     if (style) {
       countParamCount++;
-      countQuery += ` AND (style = $${countParamCount} OR style2 = $${countParamCount})`;
+      countQuery += ` AND (p.style = $${countParamCount} OR p.style2 = $${countParamCount})`;
       countParams.push(style);
     }
 
     if (search) {
       countParamCount++;
-      countQuery += ` AND name ILIKE $${countParamCount}`;
+      countQuery += ` AND p.name ILIKE $${countParamCount}`;
       countParams.push(`%${search}%`);
     }
 
@@ -175,7 +267,7 @@ router.get('/', async (req, res) => {
 
     res.json({
       message: 'Products retrieved successfully',
-      products: result.rows,
+      products,
       pagination: {
         currentPage: parseInt(page),
         totalPages,
@@ -198,7 +290,12 @@ router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const result = await pool.query('SELECT * FROM products WHERE id = $1', [id]);
+    const result = await pool.query(`
+      SELECT p.*, pi.image_data 
+      FROM products p 
+      LEFT JOIN product_images pi ON p.image_id = pi.id 
+      WHERE p.id = $1
+    `, [id]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({
@@ -207,9 +304,14 @@ router.get('/:id', async (req, res) => {
       });
     }
 
+    const product = {
+      ...result.rows[0],
+      image_data: result.rows[0].image_data ? result.rows[0].image_data.toString('base64') : null
+    };
+
     res.json({
       message: 'Product retrieved successfully',
-      product: result.rows[0]
+      product
     });
   } catch (error) {
     console.error('Get product error:', error);
@@ -234,7 +336,7 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
       style2,
       type,
       type2,
-      image_url,
+      image_id,
       stock_quantity = 0
     } = req.body;
 
@@ -247,10 +349,10 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
     }
 
     const result = await pool.query(`
-      INSERT INTO products (name, description, price, discount, stars, category, style, style2, type, type2, image_url, stock_quantity)
+      INSERT INTO products (name, description, price, discount, stars, category, style, style2, type, type2, image_id, stock_quantity)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       RETURNING *
-    `, [name, description, price, discount, stars, category, style, style2, type, type2, image_url, stock_quantity]);
+    `, [name, description, price, discount, stars, category, style, style2, type, type2, image_id, stock_quantity]);
 
     res.status(201).json({
       message: 'Product created successfully',
@@ -280,7 +382,7 @@ router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
       style2,
       type,
       type2,
-      image_url,
+      image_id,
       stock_quantity
     } = req.body;
 
@@ -301,7 +403,7 @@ router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
 
     const fields = {
       name, description, price, discount, stars, category, 
-      style, style2, type, type2, image_url, stock_quantity
+      style, style2, type, type2, image_id, stock_quantity
     };
 
     Object.entries(fields).forEach(([key, value]) => {
@@ -355,7 +457,7 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Check if product exists
+    // Check if product exists and get image_id
     const existingProduct = await pool.query('SELECT * FROM products WHERE id = $1', [id]);
     
     if (existingProduct.rows.length === 0) {
@@ -365,11 +467,19 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
       });
     }
 
+    const product = existingProduct.rows[0];
+
+    // Delete the product first
     await pool.query('DELETE FROM products WHERE id = $1', [id]);
+
+    // Delete associated image if exists
+    if (product.image_id) {
+      await pool.query('DELETE FROM product_images WHERE id = $1', [product.image_id]);
+    }
 
     res.json({
       message: 'Product deleted successfully',
-      deletedProduct: existingProduct.rows[0]
+      deletedProduct: product
     });
   } catch (error) {
     console.error('Delete product error:', error);
