@@ -2,8 +2,8 @@
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
-const { pool } = require('../config/database');
-const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { pool } = require('./config/database');
+const { authenticateToken, requireAdmin } = require('./middleware/auth');
 
 const app = express();
 
@@ -132,10 +132,10 @@ app.get('/image/:id', async (req, res) => {
 
 // Import and use other routes
 try {
-  const authRoutes = require('../routes/auth');
-  const productRoutes = require('../routes/products');
-  const reviewRoutes = require('../routes/reviews');
-  const orderRoutes = require('../routes/orders');
+  const authRoutes = require('./routes/auth');
+  const productRoutes = require('./routes/products');
+  const reviewRoutes = require('./routes/reviews');
+  const orderRoutes = require('./routes/orders');
 
   app.use('/auth', authRoutes);
   app.use('/products', productRoutes);
