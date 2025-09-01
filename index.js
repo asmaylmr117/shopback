@@ -1,4 +1,3 @@
-// api/index.js - Main serverless function for Vercel
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -11,7 +10,7 @@ const app = express();
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 4.5 * 1024 * 1024, // 4.5MB limit for serverless (lower than 5MB due to response limits)
+    fileSize: 4.5 * 1024 * 1024, // 4.5MB limit for serverless
   },
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) {
@@ -34,6 +33,16 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// Database connection helper with timeout
+async function connectWithTimeout(timeoutMs = 5000) {
+  return Promise.race([
+    pool.query('SELECT 1'),
+    new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Database connection timeout')), timeoutMs)
+    )
+  ]);
+}
+
 // Image upload endpoint
 app.post('/upload/image', authenticateToken, requireAdmin, upload.single('image'), async (req, res) => {
   try {
@@ -46,9 +55,9 @@ app.post('/upload/image', authenticateToken, requireAdmin, upload.single('image'
 
     const imageBuffer = req.file.buffer;
     
-    // Initialize database connection if not already done
+    // Test database connection with timeout
     try {
-      await pool.query('SELECT 1');
+      await connectWithTimeout(5000);
     } catch (dbError) {
       console.error('Database connection failed:', dbError);
       return res.status(500).json({
@@ -57,10 +66,15 @@ app.post('/upload/image', authenticateToken, requireAdmin, upload.single('image'
       });
     }
 
-    const result = await pool.query(
-      'INSERT INTO product_images (image_data, mime_type, file_size) VALUES ($1, $2, $3) RETURNING id',
-      [imageBuffer, req.file.mimetype, req.file.size]
-    );
+    const result = await Promise.race([
+      pool.query(
+        'INSERT INTO product_images (image_data, mime_type, file_size) VALUES ($1, $2, $3) RETURNING id',
+        [imageBuffer, req.file.mimetype, req.file.size]
+      ),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Query timeout')), 10000)
+      )
+    ]);
 
     res.status(201).json({
       message: 'Image uploaded successfully',
@@ -77,6 +91,13 @@ app.post('/upload/image', authenticateToken, requireAdmin, upload.single('image'
         });
       }
     }
+
+    if (error.message === 'Database connection timeout' || error.message === 'Query timeout') {
+      return res.status(504).json({
+        error: 'Database timeout',
+        message: 'Database operation timed out'
+      });
+    }
     
     res.status(500).json({
       error: 'Server error',
@@ -90,9 +111,9 @@ app.get('/image/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    // Initialize database connection if not already done
+    // Test database connection with timeout
     try {
-      await pool.query('SELECT 1');
+      await connectWithTimeout(5000);
     } catch (dbError) {
       console.error('Database connection failed:', dbError);
       return res.status(500).json({
@@ -101,10 +122,15 @@ app.get('/image/:id', async (req, res) => {
       });
     }
 
-    const result = await pool.query(
-      'SELECT image_data, mime_type FROM product_images WHERE id = $1', 
-      [id]
-    );
+    const result = await Promise.race([
+      pool.query(
+        'SELECT image_data, mime_type FROM product_images WHERE id = $1', 
+        [id]
+      ),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Query timeout')), 10000)
+      )
+    ]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({
@@ -123,6 +149,14 @@ app.get('/image/:id', async (req, res) => {
     res.send(image_data);
   } catch (error) {
     console.error('Get image error:', error);
+    
+    if (error.message === 'Database connection timeout' || error.message === 'Query timeout') {
+      return res.status(504).json({
+        error: 'Database timeout',
+        message: 'Database operation timed out'
+      });
+    }
+    
     res.status(500).json({
       error: 'Server error',
       message: 'An error occurred while retrieving the image'
@@ -130,7 +164,7 @@ app.get('/image/:id', async (req, res) => {
   }
 });
 
-// Import and use other routes
+// Import and use other routes with error handling
 try {
   const authRoutes = require('./routes/auth');
   const productRoutes = require('./routes/products');
@@ -143,14 +177,16 @@ try {
   app.use('/orders', orderRoutes);
 } catch (routeError) {
   console.error('Error loading routes:', routeError);
+  // Continue without routes if they fail to load
 }
 
-// Health check endpoint
+// Health check endpoint - simplified to avoid database dependency
 app.get('/', (req, res) => {
   res.json({ 
     message: 'E-commerce API Server is running on Vercel!',
     version: '1.0.0',
     environment: 'serverless',
+    timestamp: new Date().toISOString(),
     endpoints: {
       auth: '/api/auth',
       products: '/api/products',
@@ -160,6 +196,25 @@ app.get('/', (req, res) => {
       image: '/api/image/:id'
     }
   });
+});
+
+// Health check with database test
+app.get('/health/database', async (req, res) => {
+  try {
+    await connectWithTimeout(3000);
+    res.json({ 
+      status: 'healthy',
+      database: 'connected',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(503).json({ 
+      status: 'unhealthy',
+      database: 'disconnected',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
 });
 
 // Error handling middleware
@@ -194,6 +249,6 @@ app.use((error, req, res, next) => {
   });
 });
 
-
+// Export for serverless
 const serverless = require('serverless-http');
 module.exports = serverless(app);
