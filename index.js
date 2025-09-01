@@ -6,11 +6,14 @@ const { authenticateToken, requireAdmin } = require('./middleware/auth');
 
 const app = express();
 
-// Configure multer for serverless environment
+// Configure multer for serverless environment with stricter limits
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 4.5 * 1024 * 1024, // 4.5MB limit for serverless (lower than 5MB due to response limits)
+    fileSize: 4 * 1024 * 1024, // Reduced to 4MB for safety
+    files: 1,
+    fields: 10,
+    fieldSize: 1024 * 1024, // 1MB per field
   },
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) {
@@ -21,7 +24,7 @@ const upload = multer({
   }
 });
 
-// Middleware
+// Middleware with consistent size limits
 app.use(cors({
   origin: process.env.NODE_ENV === 'production' 
     ? ['https://yourfrontenddomain.com', 'https://yourfrontenddomain.vercel.app']
@@ -30,11 +33,62 @@ app.use(cors({
   credentials: true
 }));
 
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// Reduce body parser limits to match serverless constraints
+app.use(express.json({ 
+  limit: '4mb',
+  verify: (req, res, buf) => {
+    // Verify content-length matches actual body size
+    const contentLength = parseInt(req.get('Content-Length') || '0');
+    if (contentLength > 0 && buf.length !== contentLength) {
+      throw new Error('Request size mismatch');
+    }
+  }
+}));
 
-// Image upload endpoint
-app.post('/upload/image', authenticateToken, requireAdmin, upload.single('image'), async (req, res) => {
+app.use(express.urlencoded({ 
+  extended: true, 
+  limit: '4mb',
+  verify: (req, res, buf) => {
+    const contentLength = parseInt(req.get('Content-Length') || '0');
+    if (contentLength > 0 && buf.length !== contentLength) {
+      throw new Error('Request size mismatch');
+    }
+  }
+}));
+
+// Add request logging middleware for debugging
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.path} - Content-Length: ${req.get('Content-Length') || 'none'}`);
+  next();
+});
+
+// Image upload endpoint with enhanced error handling
+app.post('/upload/image', authenticateToken, requireAdmin, (req, res, next) => {
+  upload.single('image')(req, res, (err) => {
+    if (err) {
+      console.error('Multer error:', err);
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(400).json({
+            error: 'File too large',
+            message: 'Image size must be less than 4MB for serverless deployment'
+          });
+        }
+        if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+          return res.status(400).json({
+            error: 'Invalid file',
+            message: 'Only one image file is allowed'
+          });
+        }
+      }
+      return res.status(400).json({
+        error: 'Upload error',
+        message: err.message
+      });
+    }
+    next();
+  });
+}, async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -44,6 +98,14 @@ app.post('/upload/image', authenticateToken, requireAdmin, upload.single('image'
     }
 
     const imageBuffer = req.file.buffer;
+    
+    // Validate buffer size
+    if (imageBuffer.length > 4 * 1024 * 1024) {
+      return res.status(400).json({
+        error: 'File too large',
+        message: 'Image size exceeds 4MB limit'
+      });
+    }
     
     // Initialize database connection if not already done
     try {
@@ -68,15 +130,6 @@ app.post('/upload/image', authenticateToken, requireAdmin, upload.single('image'
   } catch (error) {
     console.error('Image upload error:', error);
     
-    if (error instanceof multer.MulterError) {
-      if (error.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({
-          error: 'File too large',
-          message: 'Image size must be less than 4.5MB for serverless deployment'
-        });
-      }
-    }
-    
     res.status(500).json({
       error: 'Server error',
       message: 'An error occurred while uploading the image'
@@ -84,10 +137,18 @@ app.post('/upload/image', authenticateToken, requireAdmin, upload.single('image'
   }
 });
 
-// Serve images
+// Serve images with better error handling
 app.get('/image/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    
+    // Validate ID parameter
+    if (!id || isNaN(parseInt(id))) {
+      return res.status(400).json({
+        error: 'Invalid ID',
+        message: 'Image ID must be a valid number'
+      });
+    }
     
     // Initialize database connection if not already done
     try {
@@ -102,7 +163,7 @@ app.get('/image/:id', async (req, res) => {
 
     const result = await pool.query(
       'SELECT image_data, mime_type FROM product_images WHERE id = $1', 
-      [id]
+      [parseInt(id)]
     );
 
     if (result.rows.length === 0) {
@@ -129,7 +190,7 @@ app.get('/image/:id', async (req, res) => {
   }
 });
 
-// Import and use other routes
+// Import and use other routes with error handling
 try {
   const authRoutes = require('./routes/auth');
   const productRoutes = require('./routes/products');
@@ -150,6 +211,11 @@ app.get('/', (req, res) => {
     message: 'E-commerce API Server is running on Vercel!',
     version: '1.0.0',
     environment: 'serverless',
+    timestamp: new Date().toISOString(),
+    limits: {
+      maxFileSize: '4MB',
+      maxRequestSize: '4MB'
+    },
     endpoints: {
       auth: '/api/auth',
       products: '/api/products',
@@ -161,15 +227,36 @@ app.get('/', (req, res) => {
   });
 });
 
+// Handle favicon requests
+app.get('/favicon.ico', (req, res) => {
+  res.status(204).end();
+});
+
+// Catch-all for undefined routes
+app.use('*', (req, res) => {
+  res.status(404).json({
+    error: 'Route not found',
+    message: `The endpoint ${req.method} ${req.originalUrl} does not exist`
+  });
+});
+
 // Error handling middleware
 app.use((error, req, res, next) => {
   console.error('Error occurred:', error);
+  
+  // Handle request size mismatch specifically
+  if (error.message === 'Request size mismatch') {
+    return res.status(400).json({
+      error: 'Request size mismatch',
+      message: 'Content-Length header does not match actual request body size'
+    });
+  }
   
   if (error instanceof multer.MulterError) {
     if (error.code === 'LIMIT_FILE_SIZE') {
       return res.status(400).json({
         error: 'File too large',
-        message: 'Image size must be less than 4.5MB'
+        message: 'Image size must be less than 4MB'
       });
     }
     if (error.code === 'LIMIT_UNEXPECTED_FILE') {
@@ -187,12 +274,19 @@ app.use((error, req, res, next) => {
     });
   }
 
+  // Handle JSON parsing errors
+  if (error instanceof SyntaxError && error.status === 400 && 'body' in error) {
+    return res.status(400).json({
+      error: 'Invalid JSON',
+      message: 'Request body contains invalid JSON'
+    });
+  }
+
   res.status(500).json({ 
     error: 'Internal server error',
     message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
   });
 });
-
 
 const serverless = require('serverless-http');
 module.exports = serverless(app);
