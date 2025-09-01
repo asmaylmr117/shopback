@@ -45,11 +45,11 @@ app.use(cors({
 // Handle preflight requests
 app.options('*', cors());
 
-// Body parser with size verification removed
-app.use(express.json({ limit: '4mb' })); // Removed verify function
-app.use(express.urlencoded({ extended: true, limit: '4mb' })); // Removed verify function
+// Body parser without size verification
+app.use(express.json({ limit: '4mb' }));
+app.use(express.urlencoded({ extended: true, limit: '4mb' }));
 
-// Enhanced request logging
+// Enhanced request logging and GET request body check
 app.use((req, res, next) => {
   console.log('Incoming request:', {
     method: req.method,
@@ -60,38 +60,57 @@ app.use((req, res, next) => {
     userAgent: req.get('User-Agent'),
     timestamp: new Date().toISOString()
   });
+
+  // Reject GET requests with a body to prevent unexpected behavior
+  if (req.method === 'GET' && req.get('Content-Length') && parseInt(req.get('Content-Length')) > 0) {
+    console.error('GET request with body detected:', {
+      contentLength: req.get('Content-Length'),
+      url: req.url
+    });
+    return res.status(400).json({
+      error: 'Invalid request',
+      message: 'GET requests should not include a body'
+    });
+  }
   
-  // Set timeout for long-running requests
-  req.setTimeout(25000, () => {
-    console.error('Request timeout');
+  // Set timeout for long-running requests (reduced to 60s to avoid 300s limit)
+  req.setTimeout(60000, () => {
+    console.error('Request timeout:', { url: req.url, method: req.method });
     res.status(408).json({ error: 'Request timeout' });
   });
   
   next();
 });
 
-// Health check - must be before other routes
+// Health check - optimized for quick response
 app.get('/', (req, res) => {
-  res.json({ 
-    message: 'E-commerce API Server is running on Vercel!',
-    version: '1.0.0',
-    environment: 'serverless',
-    timestamp: new Date().toISOString(),
-    memory: process.memoryUsage(),
-    uptime: process.uptime(),
-    limits: {
-      maxFileSize: '4MB',
-      maxRequestSize: '4MB'
-    },
-    endpoints: {
-      auth: '/auth',
-      products: '/products',
-      reviews: '/reviews',
-      orders: '/orders',
-      upload: '/upload/image',
-      image: '/image/:id'
-    }
-  });
+  try {
+    console.log('Health check requested');
+    res.status(200).json({ 
+      message: 'E-commerce API Server is running on Vercel!',
+      version: '1.0.0',
+      environment: 'serverless',
+      timestamp: new Date().toISOString(),
+      limits: {
+        maxFileSize: '4MB',
+        maxRequestSize: '4MB'
+      },
+      endpoints: {
+        auth: '/auth',
+        products: '/products',
+        reviews: '/reviews',
+        orders: '/orders',
+        upload: '/upload/image',
+        image: '/image/:id'
+      }
+    });
+  } catch (error) {
+    console.error('Health check error:', error);
+    res.status(500).json({
+      error: 'Server error',
+      message: 'Failed to process health check'
+    });
+  }
 });
 
 // Image upload endpoint with comprehensive error handling
