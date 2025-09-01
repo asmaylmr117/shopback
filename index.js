@@ -45,41 +45,9 @@ app.use(cors({
 // Handle preflight requests
 app.options('*', cors());
 
-// Body parser with size verification
-app.use(express.json({ 
-  limit: '4mb',
-  verify: (req, res, buf, encoding) => {
-    const contentLength = parseInt(req.get('Content-Length') || '0');
-    console.log('JSON body verification:', {
-      contentLength,
-      bufferLength: buf.length,
-      encoding
-    });
-    
-    if (contentLength > 0 && Math.abs(buf.length - contentLength) > 10) {
-      console.error('Content-Length mismatch:', { contentLength, bufferLength: buf.length });
-      throw new Error('Request size mismatch');
-    }
-  }
-}));
-
-app.use(express.urlencoded({ 
-  extended: true, 
-  limit: '4mb',
-  verify: (req, res, buf, encoding) => {
-    const contentLength = parseInt(req.get('Content-Length') || '0');
-    console.log('URL-encoded body verification:', {
-      contentLength,
-      bufferLength: buf.length,
-      encoding
-    });
-    
-    if (contentLength > 0 && Math.abs(buf.length - contentLength) > 10) {
-      console.error('Content-Length mismatch:', { contentLength, bufferLength: buf.length });
-      throw new Error('Request size mismatch');
-    }
-  }
-}));
+// Body parser with size verification removed
+app.use(express.json({ limit: '4mb' })); // Removed verify function
+app.use(express.urlencoded({ extended: true, limit: '4mb' })); // Removed verify function
 
 // Enhanced request logging
 app.use((req, res, next) => {
