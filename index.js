@@ -194,12 +194,6 @@ app.use((error, req, res, next) => {
   });
 });
 
-// Handle 404s
-app.use('*', (req, res) => {
-  res.status(404).json({
-    error: 'Not found',
-    message: 'The requested endpoint does not exist'
-  });
-});
+
 
 module.exports = app;
