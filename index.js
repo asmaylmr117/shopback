@@ -1,4 +1,3 @@
-// api/index.js - Main serverless function for Vercel
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -6,18 +5,20 @@ const { pool } = require('./config/database');
 const { authenticateToken, requireAdmin } = require('./middleware/auth');
 
 const app = express();
-app.get('/api', (req, res) => {
-  res.status(200).json({
-    message: '🟢 API root is working fine',
-    now: new Date().toISOString()
+
+// Middleware للتصحيح أثناء التطوير
+if (process.env.NODE_ENV === 'development') {
+  app.use((req, res, next) => {
+    console.log(`Incoming request: ${req.method} ${req.path}`);
+    next();
   });
-});
+}
 
 // Configure multer for serverless environment
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 4.5 * 1024 * 1024, // 4.5MB limit for serverless (lower than 5MB due to response limits)
+    fileSize: 4.5 * 1024 * 1024, // 4.5MB limit for serverless
   },
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) {
@@ -30,18 +31,42 @@ const upload = multer({
 
 // Middleware
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production' 
-    ? ['https://yourfrontenddomain.com', 'https://yourfrontenddomain.vercel.app']
-    : '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  credentials: true
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+  credentials: false 
 }));
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// Health check endpoint
+app.get('/', (req, res) => {
+  res.json({ 
+    message: 'E-commerce API Server is running on Vercel!',
+    version: '1.0.0',
+    environment: 'serverless',
+    endpoints: {
+      auth: '/api/auth',
+      products: '/api/products',
+      reviews: '/api/reviews',
+      orders: '/api/orders',
+      upload: '/api/upload/image',
+      image: '/api/image/:id'
+    }
+  });
+});
+
+// API root endpoint
+app.get('/api', (req, res) => {
+  res.status(200).json({
+    message: '🟢 API root is working fine',
+    now: new Date().toISOString()
+  });
+});
+
 // Image upload endpoint
-app.post('/upload/image', authenticateToken, requireAdmin, upload.single('image'), async (req, res) => {
+app.post('/api/upload/image', authenticateToken, requireAdmin, upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -91,8 +116,8 @@ app.post('/upload/image', authenticateToken, requireAdmin, upload.single('image'
   }
 });
 
-// Serve images
-app.get('/image/:id', async (req, res) => {
+// Serve images endpoint - تم التصحيح هنا
+app.get('/api/image/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
@@ -136,37 +161,24 @@ app.get('/image/:id', async (req, res) => {
   }
 });
 
-// Import and use other routes
+// Import and use other routes with error handling
 try {
   const authRoutes = require('./routes/auth');
   const productRoutes = require('./routes/products');
   const reviewRoutes = require('./routes/reviews');
   const orderRoutes = require('./routes/orders');
 
-  app.use('/auth', authRoutes);
-  app.use('/products', productRoutes);
-  app.use('/reviews', reviewRoutes);
-  app.use('/orders', orderRoutes);
+  // استخدام البادئة /api لجميع الروتات
+  app.use('/api/auth', authRoutes);
+  app.use('/api/products', productRoutes);
+  app.use('/api/reviews', reviewRoutes);
+  app.use('/api/orders', orderRoutes);
+  
+  console.log('All routes loaded successfully');
 } catch (routeError) {
   console.error('Error loading routes:', routeError);
+  // يمكنك إضافة معالجة إضافية هنا إذا لزم الأمر
 }
-
-// Health check endpoint
-app.get('/', (req, res) => {
-  res.json({ 
-    message: 'E-commerce API Server is running on Vercel!',
-    version: '1.0.0',
-    environment: 'serverless',
-    endpoints: {
-      auth: '/api/auth',
-      products: '/api/products',
-      reviews: '/api/reviews',
-      orders: '/api/orders',
-      upload: '/api/upload/image',
-      image: '/api/image/:id'
-    }
-  });
-});
 
 // Error handling middleware
 app.use((error, req, res, next) => {
