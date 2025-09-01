@@ -6,6 +6,12 @@ const { pool } = require('./config/database');
 const { authenticateToken, requireAdmin } = require('./middleware/auth');
 
 const app = express();
+app.get('/api', (req, res) => {
+  res.status(200).json({
+    message: '🟢 API root is working fine',
+    now: new Date().toISOString()
+  });
+});
 
 // Configure multer for serverless environment
 const upload = multer({
