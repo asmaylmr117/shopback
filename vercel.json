@@ -3,10 +3,18 @@
   "builds": [
     {
       "src": "index.js",
-      "use": "@vercel/node"
+      "use": "@vercel/node",
+      "config": {
+        "maxLambdaSize": "50mb",
+        "includeFiles": "**"
+      }
     }
   ],
   "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/index.js"
+    },
     {
       "src": "/(.*)",
       "dest": "/index.js"
@@ -14,10 +22,12 @@
   ],
   "functions": {
     "index.js": {
-      "maxDuration": 30
+      "maxDuration": 30,
+      "memory": 1024
     }
   },
   "env": {
     "NODE_ENV": "production"
-  }
+  },
+  "regions": ["iad1"]
 }
