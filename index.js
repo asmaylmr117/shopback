@@ -132,10 +132,10 @@ app.get('/image/:id', async (req, res) => {
 
 // Import and use other routes
 try {
-  const authRoutes = require('../routes/auth');
-  const productRoutes = require('../routes/products');
-  const reviewRoutes = require('../routes/reviews');
-  const orderRoutes = require('../routes/orders');
+  const authRoutes = require('./routes/auth');
+  const productRoutes = require('./routes/products');
+  const reviewRoutes = require('./routes/reviews');
+  const orderRoutes = require('./routes/orders');
 
   app.use('/auth', authRoutes);
   app.use('/products', productRoutes);
