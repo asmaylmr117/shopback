@@ -32,7 +32,18 @@ const initializeDatabase = async () => {
       )
     `);
 
-    // Create products table
+    // Create product_images table (new table for storing images)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS product_images (
+        id SERIAL PRIMARY KEY,
+        image_data BYTEA NOT NULL,
+        mime_type VARCHAR(50) NOT NULL,
+        file_size INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create products table (updated to reference image table)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS products (
         id SERIAL PRIMARY KEY,
@@ -46,11 +57,39 @@ const initializeDatabase = async () => {
         style2 VARCHAR(100),
         type VARCHAR(100),
         type2 VARCHAR(100),
-        image_url VARCHAR(500),
+        image_id INTEGER REFERENCES product_images(id) ON DELETE SET NULL,
         stock_quantity INTEGER DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
+    `);
+
+    // Create index on image_id for better performance
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_products_image_id ON products(image_id)
+    `);
+
+    // Create index on category for better filtering performance
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_products_category ON products(category)
+    `);
+
+    // Create index on type columns for better filtering performance
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_products_type ON products(type)
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_products_type2 ON products(type2)
+    `);
+
+    // Create index on style columns for better filtering performance
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_products_style ON products(style)
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_products_style2 ON products(style2)
     `);
 
     // Create reviews table
@@ -103,14 +142,83 @@ const initializeDatabase = async () => {
       )
     `);
 
+    // Migration: Add image_id column to existing products table if it doesn't exist
+    try {
+      await pool.query(`
+        ALTER TABLE products ADD COLUMN IF NOT EXISTS image_id INTEGER REFERENCES product_images(id) ON DELETE SET NULL
+      `);
+    } catch (error) {
+      // Column might already exist, ignore error
+      console.log('image_id column already exists or migration error:', error.message);
+    }
+
+    // Migration: Remove image_url column if it exists (optional cleanup)
+    try {
+      const checkColumn = await pool.query(`
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name='products' AND column_name='image_url'
+      `);
+      
+      if (checkColumn.rows.length > 0) {
+        console.log('Found image_url column. You may want to migrate data before removing it.');
+        // Uncomment the next line to remove the column after migration
+        // await pool.query('ALTER TABLE products DROP COLUMN IF EXISTS image_url');
+      }
+    } catch (error) {
+      console.log('Column check error:', error.message);
+    }
+
     console.log('Database tables initialized successfully');
+    console.log('Image storage system is ready');
   } catch (error) {
     console.error('Error initializing database:', error);
     throw error;
   }
 };
 
+// Helper function to migrate existing image URLs to database storage (optional)
+const migrateImageUrls = async () => {
+  try {
+    console.log('Starting image URL migration...');
+    
+    const products = await pool.query('SELECT id, image_url FROM products WHERE image_url IS NOT NULL AND image_id IS NULL');
+    
+    for (const product of products.rows) {
+      try {
+        // This is a placeholder - you would need to implement actual URL fetching
+        // and conversion to binary data based on your specific needs
+        console.log(`Would migrate image for product ${product.id}: ${product.image_url}`);
+        
+        // Example implementation (you would need to adapt this):
+        /*
+        const response = await fetch(product.image_url);
+        const imageBuffer = await response.buffer();
+        const mimeType = response.headers.get('content-type') || 'image/jpeg';
+        
+        const imageResult = await pool.query(
+          'INSERT INTO product_images (image_data, mime_type, file_size) VALUES ($1, $2, $3) RETURNING id',
+          [imageBuffer, mimeType, imageBuffer.length]
+        );
+        
+        await pool.query(
+          'UPDATE products SET image_id = $1 WHERE id = $2',
+          [imageResult.rows[0].id, product.id]
+        );
+        */
+      } catch (error) {
+        console.error(`Failed to migrate image for product ${product.id}:`, error);
+      }
+    }
+    
+    console.log('Image URL migration completed');
+  } catch (error) {
+    console.error('Error during image migration:', error);
+  }
+};
+
 module.exports = {
   pool,
-  initializeDatabase
+  initializeDatabase,
+  migrateImageUrls
 };
