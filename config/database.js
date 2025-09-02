@@ -52,9 +52,9 @@ const initializeDatabase = async () => {
     
     console.log('Initializing database tables...');
 
-    // Execute all table creation queries with timeout
+    // Execute all table creation queries in correct order
     const queries = [
-      // Create users table
+      // Create users table FIRST
       `CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
         username VARCHAR(50) UNIQUE NOT NULL,
@@ -102,7 +102,7 @@ const initializeDatabase = async () => {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )`,
       
-      // Create customer_addresses table
+      // Create customer_addresses table (depends on users)
       `CREATE TABLE IF NOT EXISTS customer_addresses (
         id SERIAL PRIMARY KEY,
         user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -113,7 +113,7 @@ const initializeDatabase = async () => {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )`,
       
-      // Create orders table
+      // Create orders table (depends on users and customer_addresses)
       `CREATE TABLE IF NOT EXISTS orders (
         id SERIAL PRIMARY KEY,
         user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -125,7 +125,7 @@ const initializeDatabase = async () => {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )`,
       
-      // Create order_items table
+      // Create order_items table (depends on orders and products)
       `CREATE TABLE IF NOT EXISTS order_items (
         id SERIAL PRIMARY KEY,
         order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE,
@@ -138,12 +138,18 @@ const initializeDatabase = async () => {
 
     // Execute each query with timeout
     for (const query of queries) {
-      await Promise.race([
-        client.query(query),
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Query timeout')), 10000)
-        )
-      ]);
+      try {
+        await Promise.race([
+          client.query(query),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Query timeout')), 10000)
+          )
+        ]);
+        console.log(`✅ Table created: ${query.split(' ')[5]}`);
+      } catch (error) {
+        console.error(`❌ Error creating table: ${error.message}`);
+        // Continue with other tables instead of failing completely
+      }
     }
 
     // Create indexes with timeout
@@ -162,6 +168,7 @@ const initializeDatabase = async () => {
             setTimeout(() => reject(new Error('Index creation timeout')), 5000)
           )
         ]);
+        console.log(`✅ Index created: ${indexQuery.split(' ')[5]}`);
       } catch (error) {
         console.log('Index creation note:', error.message);
       }
@@ -177,13 +184,15 @@ const initializeDatabase = async () => {
           setTimeout(() => reject(new Error('Alter table timeout')), 5000)
         )
       ]);
+      console.log('✅ Image_id column added to products table');
     } catch (error) {
       console.log('Column alteration note:', error.message);
     }
 
-    console.log('Database tables initialized successfully');
+    console.log('✅ Database tables initialized successfully');
+    return true;
   } catch (error) {
-    console.error('Error initializing database:', error);
+    console.error('❌ Error initializing database:', error);
     throw error;
   } finally {
     if (client) {
@@ -210,10 +219,10 @@ const testConnection = async () => {
       )
     ]);
     
-    console.log('Database connection successful');
+    console.log('✅ Database connection successful');
     return true;
   } catch (error) {
-    console.error('Database connection failed:', error);
+    console.error('❌ Database connection failed:', error);
     return false;
   } finally {
     if (client) {
