@@ -10,7 +10,7 @@ const app = express();
 let pool, authenticateToken, requireAdmin, requireCustomerOrAdmin;
 let databaseInitialized = false;
 
-// Track which routes are loaded successfully - ONLY ONE DECLARATION
+// Track which routes are loaded successfully
 let routesLoaded = {
   auth: false,
   products: false,
@@ -18,44 +18,15 @@ let routesLoaded = {
   orders: false
 };
 
-// Load database config with detailed error handling
-try {
-  const database = require('./config/database');
-  pool = database.pool;
-  console.log('✅ Database config loaded successfully');
-  
-  // Initialize database tables
-  if (database.initializeDatabase) {
-    database.initializeDatabase()
-      .then(() => {
-        databaseInitialized = true;
-        console.log('✅ Database initialized successfully');
-      })
-      .catch(err => {
-        console.error('❌ Database initialization failed:', err);
-      });
-  }
-} catch (dbError) {
-  console.error('❌ Failed to load database config:', dbError.message);
-}
-
-// Load auth middleware with error handling
-try {
-  const auth = require('./middleware/auth');
-  authenticateToken = auth.authenticateToken;
-  requireAdmin = auth.requireAdmin;
-  requireCustomerOrAdmin = auth.requireCustomerOrAdmin;
-  console.log('✅ Auth middleware loaded successfully');
-} catch (authError) {
-  console.error('❌ Failed to load auth middleware:', authError.message);
-}
-
 // Middleware
 app.use(cors({
-  origin: '*', 
+  origin: process.env.NODE_ENV === 'production' 
+    ? ['https://yourfrontenddomain.com', 'https://yourfrontenddomain.vercel.app']
+    : '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  credentials: false 
+  credentials: true
 }));
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -64,7 +35,8 @@ app.get('/api', (req, res) => {
   res.status(200).json({
     message: 'API root is working fine',
     now: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development'
+    environment: process.env.NODE_ENV || 'development',
+    databaseInitialized
   });
 });
 
@@ -188,6 +160,76 @@ app.get('/api/db-test', async (req, res) => {
   }
 });
 
+// Check database tables endpoint
+app.get('/api/check-tables', async (req, res) => {
+  if (!pool) {
+    return res.status(503).json({
+      error: 'Database not available',
+      message: 'Database pool not initialized'
+    });
+  }
+
+  try {
+    const tables = ['users', 'products', 'customer_addresses', 'orders', 'order_items', 'reviews', 'product_images'];
+    const tableStatus = {};
+
+    for (const table of tables) {
+      try {
+        const result = await pool.query(
+          `SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = $1)`,
+          [table]
+        );
+        tableStatus[table] = result.rows[0].exists;
+      } catch (error) {
+        tableStatus[table] = false;
+        console.error(`Error checking table ${table}:`, error.message);
+      }
+    }
+
+    res.json({
+      message: 'Table status check',
+      tables: tableStatus,
+      databaseInitialized,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Table check error:', error);
+    res.status(500).json({
+      error: 'Server error',
+      message: 'An error occurred while checking tables'
+    });
+  }
+});
+
+// Reinitialize database endpoint (for development only)
+app.post('/api/reinit-db', async (req, res) => {
+  if (process.env.NODE_ENV !== 'development') {
+    return res.status(403).json({
+      error: 'Forbidden',
+      message: 'This endpoint is only available in development mode'
+    });
+  }
+
+  try {
+    const database = require('./config/database');
+    console.log('🔄 Reinitializing database...');
+    
+    await database.initializeDatabase();
+    databaseInitialized = true;
+    
+    res.json({
+      message: 'Database reinitialized successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Reinit error:', error);
+    res.status(500).json({
+      error: 'Reinitialization failed',
+      message: error.message
+    });
+  }
+});
+
 // Main health check (root)
 app.get('/', (req, res) => {
   res.json({ 
@@ -195,9 +237,11 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     environment: 'serverless',
     status: 'online',
+    databaseInitialized,
     apiEndpoint: '/api',
     healthCheck: '/api/health',
-    debug: '/api/debug'
+    debug: '/api/debug',
+    tableCheck: '/api/check-tables'
   });
 });
 
@@ -207,7 +251,8 @@ app.get('/api/test', (req, res) => {
     message: 'Test endpoint working',
     timestamp: new Date().toISOString(),
     method: req.method,
-    url: req.url
+    url: req.url,
+    databaseInitialized
   });
 });
 
@@ -409,7 +454,8 @@ app.get('/api/health', (req, res) => {
       upload: '/api/upload/image',
       image: '/api/image/:id',
       debug: '/api/debug',
-      health: '/api/health'
+      health: '/api/health',
+      tableCheck: '/api/check-tables'
     },
     timestamp: new Date().toISOString()
   });
@@ -455,14 +501,58 @@ app.use('*', (req, res) => {
     requestedPath: req.originalUrl,
     method: req.method,
     routesStatus: routesLoaded,
+    databaseInitialized,
     availableEndpoints: [
       '/api',
       '/api/health',
       '/api/debug',
       '/api/env-check',
-      '/api/db-test'
+      '/api/db-test',
+      '/api/check-tables'
     ]
   });
+});
+
+// Initialize application
+async function initializeApp() {
+  try {
+    // Load database config
+    const database = require('./config/database');
+    pool = database.pool;
+    console.log('✅ Database config loaded successfully');
+    
+    // Initialize database tables - WAIT for completion
+    if (database.initializeDatabase) {
+      console.log('🔄 Initializing database tables...');
+      try {
+        await database.initializeDatabase();
+        databaseInitialized = true;
+        console.log('✅ Database initialized successfully');
+      } catch (err) {
+        console.error('❌ Database initialization failed:', err);
+        databaseInitialized = false;
+      }
+    }
+  } catch (dbError) {
+    console.error('❌ Failed to load database config:', dbError.message);
+  }
+
+  // Load auth middleware with error handling
+  try {
+    const auth = require('./middleware/auth');
+    authenticateToken = auth.authenticateToken;
+    requireAdmin = auth.requireAdmin;
+    requireCustomerOrAdmin = auth.requireCustomerOrAdmin;
+    console.log('✅ Auth middleware loaded successfully');
+  } catch (authError) {
+    console.error('❌ Failed to load auth middleware:', authError.message);
+  }
+}
+
+// Start the application
+initializeApp().then(() => {
+  console.log('🚀 Application initialization completed');
+  console.log('📊 Database initialized:', databaseInitialized);
 });
 
 module.exports = app;
