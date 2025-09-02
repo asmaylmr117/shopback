@@ -10,7 +10,7 @@ const router = express.Router();
 const generateToken = (userId, role) => {
   return jwt.sign(
     { userId, role },
-    process.env.JWT_SECRET,
+    process.env.JWT_SECRET || 'fallback_secret_key',
     { expiresIn: '24h' }
   );
 };
@@ -28,37 +28,57 @@ router.post('/admin/login', async (req, res) => {
       });
     }
 
-    // Check if credentials match environment variables (for admin)
-    if (username === process.env.ADMIN_USERNAME && password === process.env.ADMIN_PASSWORD) {
-      // Check if admin user exists in database
-      let adminResult = await pool.query('SELECT * FROM users WHERE username = $1 AND role = $2', [username, 'admin']);
-      
-      let adminUser;
-      if (adminResult.rows.length === 0) {
-        // Create admin user if doesn't exist
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const newAdminResult = await pool.query(`
-          INSERT INTO users (username, email, password, role)
-          VALUES ($1, $2, $3, $4)
-          RETURNING id, username, email, role
-        `, [username, 'admin@shop.co', hashedPassword, 'admin']);
-        adminUser = newAdminResult.rows[0];
-      } else {
-        adminUser = adminResult.rows[0];
-      }
+    // Check environment variables
+    const adminUsername = process.env.ADMIN_USERNAME;
+    const adminPassword = process.env.ADMIN_PASSWORD;
 
-      const token = generateToken(adminUser.id, adminUser.role);
-
-      res.json({
-        message: 'Admin login successful',
-        token,
-        user: {
-          id: adminUser.id,
-          username: adminUser.username,
-          email: adminUser.email,
-          role: adminUser.role
-        }
+    if (!adminUsername || !adminPassword) {
+      console.error('Admin credentials not set in environment variables');
+      return res.status(500).json({
+        error: 'Server configuration error',
+        message: 'Admin credentials not configured properly'
       });
+    }
+
+    // Check if credentials match environment variables (for admin)
+    if (username === adminUsername && password === adminPassword) {
+      try {
+        // Check if admin user exists in database
+        let adminResult = await pool.query('SELECT * FROM users WHERE username = $1 AND role = $2', [username, 'admin']);
+        
+        let adminUser;
+        if (adminResult.rows.length === 0) {
+          // Create admin user if doesn't exist
+          const hashedPassword = await bcrypt.hash(password, 10);
+          const newAdminResult = await pool.query(`
+            INSERT INTO users (username, email, password, role)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id, username, email, role
+          `, [username, 'admin@shop.co', hashedPassword, 'admin']);
+          adminUser = newAdminResult.rows[0];
+        } else {
+          adminUser = adminResult.rows[0];
+        }
+
+        const token = generateToken(adminUser.id, adminUser.role);
+
+        res.json({
+          message: 'Admin login successful',
+          token,
+          user: {
+            id: adminUser.id,
+            username: adminUser.username,
+            email: adminUser.email,
+            role: adminUser.role
+          }
+        });
+      } catch (dbError) {
+        console.error('Database error during admin login:', dbError);
+        return res.status(500).json({
+          error: 'Database error',
+          message: 'Could not process admin login due to database issues'
+        });
+      }
     } else {
       return res.status(401).json({
         error: 'Authentication failed',
