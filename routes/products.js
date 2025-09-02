@@ -216,4 +216,208 @@ router.get('/', async (req, res) => {
 });
 
 // Add new product (admin only)
-router.post('/', authenticateToken, requireAdmin, async (req, res) =>
+router.post('/', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const {
+      name,
+      description,
+      price,
+      discount = 0,
+      stars = 0,
+      category,
+      style,
+      style2,
+      type,
+      type2,
+      image_id,
+      stock_quantity = 0
+    } = req.body;
+
+    // Validate required fields
+    if (!name || !price || !category || !type) {
+      return res.status(400).json({
+        error: 'Validation error',
+        message: 'Name, price, category, and type are required'
+      });
+    }
+
+    const result = await pool.query(`
+      INSERT INTO products (name, description, price, discount, stars, category, style, style2, type, type2, image_id, stock_quantity)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      RETURNING *
+    `, [name, description, price, discount, stars, category, style, style2, type, type2, image_id, stock_quantity]);
+
+    res.status(201).json({
+      message: 'Product created successfully',
+      product: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Create product error:', error);
+    res.status(500).json({
+      error: 'Server error',
+      message: 'An error occurred while creating the product'
+    });
+  }
+});
+
+// Get product by ID (public route) - MUST come after specific routes
+router.get('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await pool.query(`
+      SELECT p.*, pi.image_data 
+      FROM products p 
+      LEFT JOIN product_images pi ON p.image_id = pi.id 
+      WHERE p.id = $1
+    `, [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: 'Product not found',
+        message: 'Product with the specified ID does not exist'
+      });
+    }
+
+    const product = {
+      ...result.rows[0],
+      image_data: result.rows[0].image_data ? result.rows[0].image_data.toString('base64') : null
+    };
+
+    res.json({
+      message: 'Product retrieved successfully',
+      product
+    });
+  } catch (error) {
+    console.error('Get product error:', error);
+    res.status(500).json({
+      error: 'Server error',
+      message: 'An error occurred while retrieving the product'
+    });
+  }
+});
+
+// Update product (admin only)
+router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      name,
+      description,
+      price,
+      discount,
+      stars,
+      category,
+      style,
+      style2,
+      type,
+      type2,
+      image_id,
+      stock_quantity
+    } = req.body;
+
+    // Check if product exists
+    const existingProduct = await pool.query('SELECT * FROM products WHERE id = $1', [id]);
+    
+    if (existingProduct.rows.length === 0) {
+      return res.status(404).json({
+        error: 'Product not found',
+        message: 'Product with the specified ID does not exist'
+      });
+    }
+
+    // Build update query dynamically
+    let updateFields = [];
+    let queryParams = [];
+    let paramCount = 0;
+
+    const fields = {
+      name, description, price, discount, stars, category, 
+      style, style2, type, type2, image_id, stock_quantity
+    };
+
+    Object.entries(fields).forEach(([key, value]) => {
+      if (value !== undefined) {
+        paramCount++;
+        updateFields.push(`${key} = ${paramCount}`);
+        queryParams.push(value);
+      }
+    });
+
+    if (updateFields.length === 0) {
+      return res.status(400).json({
+        error: 'Validation error',
+        message: 'At least one field must be provided for update'
+      });
+    }
+
+    // Add updated_at field
+    paramCount++;
+    updateFields.push(`updated_at = ${paramCount}`);
+    queryParams.push(new Date());
+
+    // Add product ID for WHERE clause
+    paramCount++;
+    queryParams.push(id);
+
+    const query = `
+      UPDATE products 
+      SET ${updateFields.join(', ')}
+      WHERE id = ${paramCount}
+      RETURNING *
+    `;
+
+    const result = await pool.query(query, queryParams);
+
+    res.json({
+      message: 'Product updated successfully',
+      product: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Update product error:', error);
+    res.status(500).json({
+      error: 'Server error',
+      message: 'An error occurred while updating the product'
+    });
+  }
+});
+
+// Delete product (admin only)
+router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Check if product exists and get image_id
+    const existingProduct = await pool.query('SELECT * FROM products WHERE id = $1', [id]);
+    
+    if (existingProduct.rows.length === 0) {
+      return res.status(404).json({
+        error: 'Product not found',
+        message: 'Product with the specified ID does not exist'
+      });
+    }
+
+    const product = existingProduct.rows[0];
+
+    // Delete the product first
+    await pool.query('DELETE FROM products WHERE id = $1', [id]);
+
+    // Delete associated image if exists
+    if (product.image_id) {
+      await pool.query('DELETE FROM product_images WHERE id = $1', [product.image_id]);
+    }
+
+    res.json({
+      message: 'Product deleted successfully',
+      deletedProduct: product
+    });
+  } catch (error) {
+    console.error('Delete product error:', error);
+    res.status(500).json({
+      error: 'Server error',
+      message: 'An error occurred while deleting the product'
+    });
+  }
+});
+
+module.exports = router;
