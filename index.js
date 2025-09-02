@@ -10,8 +10,8 @@ const app = express();
 let pool, authenticateToken, requireAdmin, requireCustomerOrAdmin;
 let databaseInitialized = false;
 
-// Track which routes are loaded successfully
-const routesLoaded = {
+// Track which routes are loaded successfully - ONLY ONE DECLARATION
+let routesLoaded = {
   auth: false,
   products: false,
   reviews: false,
@@ -52,7 +52,7 @@ try {
 
 // Middleware
 app.use(cors({
-  origin: '*', // Allow all origins
+  origin: '*', 
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: false 
 }));
