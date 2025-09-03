@@ -19,13 +19,15 @@ let routesLoaded = {
 };
 
 // Middleware
+const cors = require('cors');
+
+// Middleware
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production' 
-    ? ['https://yourfrontenddomain.com', 'https://yourfrontenddomain.vercel.app']
-    : '*',
+  origin: '*', 
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  credentials: true
+  credentials: false 
 }));
+
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
