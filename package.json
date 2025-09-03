@@ -20,6 +20,8 @@
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.0.2",
     "pg": "^8.16.3",
-    "serverless-http": "^4.0.0"
+    "serverless-http": "^4.0.0",
+    "formidable-serverless": "^1.1.1",
+    "busboy": "^1.6.0"
   }
 }
