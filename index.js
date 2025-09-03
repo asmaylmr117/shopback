@@ -1,4 +1,4 @@
-const express = require('express');
+this index.js :const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const fs = require('fs');
@@ -574,4 +574,4 @@ initializeApp().then(() => {
   console.log('📊 Database initialized:', databaseInitialized);
 });
 
-module.exports = app;this my index
+module.exports = app;
