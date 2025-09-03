@@ -45,7 +45,6 @@ app.use(cors({
 // Handle preflight requests
 app.options('*', cors());
 
-
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -275,21 +274,6 @@ app.get('/api/test', (req, res) => {
   });
 });
 
-// Configure multer for serverless environment
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 4.5 * 1024 * 1024, // 4.5MB limit for serverless
-  },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only image files are allowed'), false);
-    }
-  }
-});
-
 // Image upload endpoint using busboy (works on Vercel)
 app.post('/api/upload/image', (req, res) => {
   try {
@@ -297,10 +281,12 @@ app.post('/api/upload/image', (req, res) => {
     let imageBuffer = null;
     let mimeType = '';
     let fileSize = 0;
+    let fileName = '';
 
     bb.on('file', (name, file, info) => {
-      const { filename, encoding, mimeType: fileMimeType } = info;
+      const { filename, mimeType: fileMimeType } = info;
       mimeType = fileMimeType;
+      fileName = filename || 'uploaded_image';
       
       const chunks = [];
       file.on('data', (chunk) => {
@@ -329,17 +315,36 @@ app.post('/api/upload/image', (req, res) => {
           });
         }
 
+        // Validate file type
+        if (!mimeType.startsWith('image/')) {
+          return res.status(400).json({
+            error: 'Invalid file type',
+            message: 'Only image files are allowed'
+          });
+        }
+
+        // Validate file size (4.5MB limit)
+        if (fileSize > 4.5 * 1024 * 1024) {
+          return res.status(400).json({
+            error: 'File too large',
+            message: 'Image size must be less than 4.5MB'
+          });
+        }
+
         // Test database connection
         await pool.query('SELECT 1');
 
         const result = await pool.query(
-          'INSERT INTO product_images (image_data, mime_type, file_size) VALUES ($1, $2, $3) RETURNING id',
-          [imageBuffer, mimeType, fileSize]
+          'INSERT INTO product_images (image_data, mime_type, file_size, original_name) VALUES ($1, $2, $3, $4) RETURNING id',
+          [imageBuffer, mimeType, fileSize, fileName]
         );
 
         res.status(201).json({
           message: 'Image uploaded successfully',
-          imageId: result.rows[0].id
+          imageId: result.rows[0].id,
+          fileName: fileName,
+          fileSize: fileSize,
+          mimeType: mimeType
         });
 
       } catch (error) {
@@ -369,6 +374,7 @@ app.post('/api/upload/image', (req, res) => {
     });
   }
 });
+
 // Serve images
 app.get('/api/image/:id', async (req, res) => {
   if (!pool) {
@@ -495,19 +501,12 @@ app.get('/api/health', (req, res) => {
 app.use((error, req, res, next) => {
   console.error('Unhandled error occurred:', error);
   
-  if (error instanceof multer.MulterError) {
-    if (error.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({
-        error: 'File too large',
-        message: 'Image size must be less than 4.5MB'
-      });
-    }
-    if (error.code === 'LIMIT_UNEXPECTED_FILE') {
-      return res.status(400).json({
-        error: 'Invalid file',
-        message: 'Only one image file is allowed'
-      });
-    }
+  // معالجة أخطاء busboy الخاصة
+  if (error.message.includes('Failed to parse form data')) {
+    return res.status(400).json({
+      error: 'Invalid request',
+      message: 'Failed to process file upload'
+    });
   }
   
   if (error.message === 'Only image files are allowed') {
