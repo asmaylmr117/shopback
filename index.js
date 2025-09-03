@@ -21,12 +21,20 @@ let routesLoaded = {
 // Middleware
 const cors = require('cors');
 
-// Middleware
+// Middleware - CORS configuration
 app.use(cors({
-  origin: '*', 
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  credentials: false 
+  origin: [
+    'http://localhost:5173', 
+    'http://localhost:3000', 
+    'https://shopbackco.vercel.app',
+     ],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
+
+// Handle preflight requests
+app.options('*', cors());
 
 
 app.use(express.json({ limit: '10mb' }));
