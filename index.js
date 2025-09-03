@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const multer = require('multer');
+const busboy = require('busboy');
 const fs = require('fs');
 const path = require('path');
 
@@ -290,38 +290,76 @@ const upload = multer({
   }
 });
 
-// Image upload endpoint
-app.post('/api/upload/image', upload.single('image'), async (req, res) => {
+// Image upload endpoint using busboy (works on Vercel)
+app.post('/api/upload/image', (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({
-        error: 'Validation error',
-        message: 'No image file uploaded'
+    const bb = busboy({ headers: req.headers });
+    let imageBuffer = null;
+    let mimeType = '';
+    let fileSize = 0;
+
+    bb.on('file', (name, file, info) => {
+      const { filename, encoding, mimeType: fileMimeType } = info;
+      mimeType = fileMimeType;
+      
+      const chunks = [];
+      file.on('data', (chunk) => {
+        chunks.push(chunk);
+        fileSize += chunk.length;
       });
-    }
-
-    // Check if database is available
-    if (!pool) {
-      return res.status(503).json({
-        error: 'Service unavailable',
-        message: 'Database connection not available'
+      
+      file.on('end', () => {
+        imageBuffer = Buffer.concat(chunks);
       });
-    }
-
-    const imageBuffer = req.file.buffer;
-    
-    // Test database connection
-    await pool.query('SELECT 1');
-
-    const result = await pool.query(
-      'INSERT INTO product_images (image_data, mime_type, file_size) VALUES ($1, $2, $3) RETURNING id',
-      [imageBuffer, req.file.mimetype, req.file.size]
-    );
-
-    res.status(201).json({
-      message: 'Image uploaded successfully',
-      imageId: result.rows[0].id
     });
+
+    bb.on('close', async () => {
+      try {
+        if (!imageBuffer) {
+          return res.status(400).json({
+            error: 'Validation error',
+            message: 'No image file uploaded'
+          });
+        }
+
+        if (!pool) {
+          return res.status(503).json({
+            error: 'Service unavailable',
+            message: 'Database connection not available'
+          });
+        }
+
+        // Test database connection
+        await pool.query('SELECT 1');
+
+        const result = await pool.query(
+          'INSERT INTO product_images (image_data, mime_type, file_size) VALUES ($1, $2, $3) RETURNING id',
+          [imageBuffer, mimeType, fileSize]
+        );
+
+        res.status(201).json({
+          message: 'Image uploaded successfully',
+          imageId: result.rows[0].id
+        });
+
+      } catch (error) {
+        console.error('Upload error:', error);
+        res.status(500).json({
+          error: 'Server error',
+          message: 'Failed to process image'
+        });
+      }
+    });
+
+    bb.on('error', (error) => {
+      console.error('Busboy error:', error);
+      res.status(500).json({
+        error: 'Parse error',
+        message: 'Failed to parse form data'
+      });
+    });
+
+    req.pipe(bb);
 
   } catch (error) {
     console.error('Image upload error:', error);
@@ -331,7 +369,6 @@ app.post('/api/upload/image', upload.single('image'), async (req, res) => {
     });
   }
 });
-
 // Serve images
 app.get('/api/image/:id', async (req, res) => {
   if (!pool) {
