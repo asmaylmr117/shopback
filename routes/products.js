@@ -1,6 +1,7 @@
 const express = require('express');
 const { pool } = require('../config/database');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const busboy = require('busboy');
 
 const router = express.Router();
 
@@ -215,49 +216,116 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Add new product (admin only)
-router.post('/', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const {
-      name,
-      description,
-      price,
-      discount = 0,
-      stars = 0,
-      category,
-      style,
-      style2,
-      type,
-      type2,
-      image_id,
-      stock_quantity = 0
-    } = req.body;
+// Add new product (admin only) - using busboy for FormData
+router.post('/', authenticateToken, requireAdmin, (req, res) => {
+  const bb = busboy({ headers: req.headers });
+  let imageBuffer = null;
+  let mimeType = '';
+  let fileSize = 0;
+  let productData = {};
 
-    // Validate required fields
-    if (!name || !price || !category || !type) {
-      return res.status(400).json({
-        error: 'Validation error',
-        message: 'Name, price, category, and type are required'
+  bb.on('field', (name, value) => {
+    productData[name] = value;
+  });
+
+  bb.on('file', (name, file, info) => {
+    const { filename, mimeType: fileMimeType } = info;
+    mimeType = fileMimeType;
+    
+    const chunks = [];
+    file.on('data', (chunk) => {
+      chunks.push(chunk);
+      fileSize += chunk.length;
+    });
+    
+    file.on('end', () => {
+      imageBuffer = Buffer.concat(chunks);
+    });
+  });
+
+  bb.on('close', async () => {
+    try {
+      let image_id = null;
+      
+      // Process image if uploaded
+      if (imageBuffer) {
+        const imageResult = await pool.query(
+          'INSERT INTO product_images (image_data, mime_type, file_size) VALUES ($1, $2, $3) RETURNING id',
+          [imageBuffer, mimeType, fileSize]
+        );
+        image_id = imageResult.rows[0].id;
+      }
+
+      // Extract product data from form fields
+      const {
+        name,
+        description,
+        price,
+        discount = 0,
+        stars = 0,
+        category,
+        style,
+        style2,
+        type,
+        type2,
+        stock_quantity = 0
+      } = productData;
+
+      // Validate required fields
+      if (!name || !price || !category || !type) {
+        // Delete image if validation fails
+        if (image_id) {
+          await pool.query('DELETE FROM product_images WHERE id = $1', [image_id]);
+        }
+        
+        return res.status(400).json({
+          error: 'Validation error',
+          message: 'Name, price, category, and type are required'
+        });
+      }
+
+      const result = await pool.query(`
+        INSERT INTO products (name, description, price, discount, stars, category, style, style2, type, type2, image_id, stock_quantity)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        RETURNING *
+      `, [
+        name, 
+        description, 
+        parseFloat(price), 
+        parseInt(discount || 0), 
+        parseInt(stars || 0), 
+        category, 
+        style || '', 
+        style2 || '', 
+        type, 
+        type2 || '', 
+        image_id, 
+        parseInt(stock_quantity || 0)
+      ]);
+
+      res.status(201).json({
+        message: 'Product created successfully',
+        product: result.rows[0]
+      });
+
+    } catch (error) {
+      console.error('Create product error:', error);
+      res.status(500).json({
+        error: 'Server error',
+        message: 'An error occurred while creating the product'
       });
     }
+  });
 
-    const result = await pool.query(`
-      INSERT INTO products (name, description, price, discount, stars, category, style, style2, type, type2, image_id, stock_quantity)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-      RETURNING *
-    `, [name, description, price, discount, stars, category, style, style2, type, type2, image_id, stock_quantity]);
-
-    res.status(201).json({
-      message: 'Product created successfully',
-      product: result.rows[0]
-    });
-  } catch (error) {
-    console.error('Create product error:', error);
+  bb.on('error', (error) => {
+    console.error('Busboy error:', error);
     res.status(500).json({
-      error: 'Server error',
-      message: 'An error occurred while creating the product'
+      error: 'Parse error',
+      message: 'Failed to parse form data'
     });
-  }
+  });
+
+  req.pipe(bb);
 });
 
 // Get product by ID (public route) - MUST come after specific routes
@@ -297,89 +365,158 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// Update product (admin only)
-router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const {
-      name,
-      description,
-      price,
-      discount,
-      stars,
-      category,
-      style,
-      style2,
-      type,
-      type2,
-      image_id,
-      stock_quantity
-    } = req.body;
+// Update product (admin only) - using busboy for FormData
+router.put('/:id', authenticateToken, requireAdmin, (req, res) => {
+  const { id } = req.params;
+  const bb = busboy({ headers: req.headers });
+  let imageBuffer = null;
+  let mimeType = '';
+  let fileSize = 0;
+  let productData = {};
 
-    // Check if product exists
-    const existingProduct = await pool.query('SELECT * FROM products WHERE id = $1', [id]);
+  bb.on('field', (name, value) => {
+    productData[name] = value;
+  });
+
+  bb.on('file', (name, file, info) => {
+    const { filename, mimeType: fileMimeType } = info;
+    mimeType = fileMimeType;
     
-    if (existingProduct.rows.length === 0) {
-      return res.status(404).json({
-        error: 'Product not found',
-        message: 'Product with the specified ID does not exist'
-      });
-    }
+    const chunks = [];
+    file.on('data', (chunk) => {
+      chunks.push(chunk);
+      fileSize += chunk.length;
+    });
+    
+    file.on('end', () => {
+      imageBuffer = Buffer.concat(chunks);
+    });
+  });
 
-    // Build update query dynamically
-    let updateFields = [];
-    let queryParams = [];
-    let paramCount = 0;
-
-    const fields = {
-      name, description, price, discount, stars, category, 
-      style, style2, type, type2, image_id, stock_quantity
-    };
-
-    Object.entries(fields).forEach(([key, value]) => {
-      if (value !== undefined) {
-        paramCount++;
-        updateFields.push(`${key} = ${paramCount}`);
-        queryParams.push(value);
+  bb.on('close', async () => {
+    try {
+      // Check if product exists first
+      const existingProduct = await pool.query('SELECT * FROM products WHERE id = $1', [id]);
+      
+      if (existingProduct.rows.length === 0) {
+        return res.status(404).json({
+          error: 'Product not found',
+          message: 'Product with the specified ID does not exist'
+        });
       }
-    });
 
-    if (updateFields.length === 0) {
-      return res.status(400).json({
-        error: 'Validation error',
-        message: 'At least one field must be provided for update'
+      let image_id = existingProduct.rows[0].image_id;
+      let oldImageId = null;
+      
+      // Process new image if uploaded
+      if (imageBuffer) {
+        const imageResult = await pool.query(
+          'INSERT INTO product_images (image_data, mime_type, file_size) VALUES ($1, $2, $3) RETURNING id',
+          [imageBuffer, mimeType, fileSize]
+        );
+        oldImageId = image_id; // Save old image ID for deletion
+        image_id = imageResult.rows[0].id;
+      }
+
+      // Extract product data from form fields
+      const {
+        name,
+        description,
+        price,
+        discount,
+        stars,
+        category,
+        style,
+        style2,
+        type,
+        type2,
+        stock_quantity
+      } = productData;
+
+      // Build update query dynamically
+      let updateFields = [];
+      let queryParams = [];
+      let paramCount = 0;
+
+      const fields = {
+        name, description, price, discount, stars, category, 
+        style, style2, type, type2, stock_quantity
+      };
+
+      Object.entries(fields).forEach(([key, value]) => {
+        if (value !== undefined && value !== '') {
+          paramCount++;
+          updateFields.push(`${key} = $${paramCount}`);
+          
+          // Convert numeric fields
+          if (['price', 'discount', 'stars', 'stock_quantity'].includes(key)) {
+            queryParams.push(parseFloat(value) || 0);
+          } else {
+            queryParams.push(value);
+          }
+        }
+      });
+
+      // Add image_id if there's a new image
+      if (imageBuffer) {
+        paramCount++;
+        updateFields.push(`image_id = $${paramCount}`);
+        queryParams.push(image_id);
+      }
+
+      if (updateFields.length === 0 && !imageBuffer) {
+        return res.status(400).json({
+          error: 'Validation error',
+          message: 'At least one field must be provided for update'
+        });
+      }
+
+      // Add updated_at field
+      paramCount++;
+      updateFields.push(`updated_at = $${paramCount}`);
+      queryParams.push(new Date());
+
+      // Add product ID for WHERE clause
+      paramCount++;
+      queryParams.push(id);
+
+      const query = `
+        UPDATE products 
+        SET ${updateFields.join(', ')}
+        WHERE id = $${paramCount}
+        RETURNING *
+      `;
+
+      const result = await pool.query(query, queryParams);
+
+      // Delete old image if it was replaced
+      if (oldImageId) {
+        await pool.query('DELETE FROM product_images WHERE id = $1', [oldImageId]);
+      }
+
+      res.json({
+        message: 'Product updated successfully',
+        product: result.rows[0]
+      });
+
+    } catch (error) {
+      console.error('Update product error:', error);
+      res.status(500).json({
+        error: 'Server error',
+        message: 'An error occurred while updating the product'
       });
     }
+  });
 
-    // Add updated_at field
-    paramCount++;
-    updateFields.push(`updated_at = ${paramCount}`);
-    queryParams.push(new Date());
-
-    // Add product ID for WHERE clause
-    paramCount++;
-    queryParams.push(id);
-
-    const query = `
-      UPDATE products 
-      SET ${updateFields.join(', ')}
-      WHERE id = ${paramCount}
-      RETURNING *
-    `;
-
-    const result = await pool.query(query, queryParams);
-
-    res.json({
-      message: 'Product updated successfully',
-      product: result.rows[0]
-    });
-  } catch (error) {
-    console.error('Update product error:', error);
+  bb.on('error', (error) => {
+    console.error('Busboy error:', error);
     res.status(500).json({
-      error: 'Server error',
-      message: 'An error occurred while updating the product'
+      error: 'Parse error',
+      message: 'Failed to parse form data'
     });
-  }
+  });
+
+  req.pipe(bb);
 });
 
 // Delete product (admin only)
