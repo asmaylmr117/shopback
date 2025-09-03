@@ -18,19 +18,28 @@ let routesLoaded = {
   orders: false
 };
 
-// Middleware
-const cors = require('cors');
+// CORS configuration - UPDATED
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'https://shopbackco.vercel.app',
+  'https://yourfrontenddomain.com'
+];
 
-// Middleware - CORS configuration
 app.use(cors({
-  origin: [
-    'http://localhost:5173', 
-    'http://localhost:3000', 
-    'https://shopbackco.vercel.app',
-     ],
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, Postman, etc.)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
 }));
 
 // Handle preflight requests
