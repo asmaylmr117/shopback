@@ -292,63 +292,37 @@ const upload = multer({
 
 // Image upload endpoint
 app.post('/api/upload/image', upload.single('image'), async (req, res) => {
-  // Check if required services are loaded
-  if (!authenticateToken || !requireAdmin || !pool) {
-    return res.status(503).json({
-      error: 'Service unavailable',
-      message: 'Required dependencies not loaded properly'
-    });
-  }
-
   try {
-    // Apply authentication middleware
-    authenticateToken(req, res, (authErr) => {
-      if (authErr) {
-        return res.status(401).json({
-          error: 'Authentication failed',
-          message: 'Invalid or missing token'
-        });
-      }
-
-      requireAdmin(req, res, async (adminErr) => {
-        if (adminErr) {
-          return res.status(403).json({
-            error: 'Access denied',
-            message: 'Admin privileges required'
-          });
-        }
-
-        if (!req.file) {
-          return res.status(400).json({
-            error: 'Validation error',
-            message: 'No image file uploaded'
-          });
-        }
-
-        try {
-          const imageBuffer = req.file.buffer;
-          
-          // Test database connection
-          await pool.query('SELECT 1');
-
-          const result = await pool.query(
-            'INSERT INTO product_images (image_data, mime_type, file_size) VALUES ($1, $2, $3) RETURNING id',
-            [imageBuffer, req.file.mimetype, req.file.size]
-          );
-
-          res.status(201).json({
-            message: 'Image uploaded successfully',
-            imageId: result.rows[0].id
-          });
-        } catch (dbError) {
-          console.error('Database error:', dbError);
-          res.status(500).json({
-            error: 'Database error',
-            message: 'Could not save image to database'
-          });
-        }
+    if (!req.file) {
+      return res.status(400).json({
+        error: 'Validation error',
+        message: 'No image file uploaded'
       });
+    }
+
+    // Check if database is available
+    if (!pool) {
+      return res.status(503).json({
+        error: 'Service unavailable',
+        message: 'Database connection not available'
+      });
+    }
+
+    const imageBuffer = req.file.buffer;
+    
+    // Test database connection
+    await pool.query('SELECT 1');
+
+    const result = await pool.query(
+      'INSERT INTO product_images (image_data, mime_type, file_size) VALUES ($1, $2, $3) RETURNING id',
+      [imageBuffer, req.file.mimetype, req.file.size]
+    );
+
+    res.status(201).json({
+      message: 'Image uploaded successfully',
+      imageId: result.rows[0].id
     });
+
   } catch (error) {
     console.error('Image upload error:', error);
     res.status(500).json({
