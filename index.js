@@ -44,10 +44,16 @@ app.use(cors({
 app.options('*', cors());
 
 // ======== التعديل الهام: body-parser مشروط ======== //
-// استخدم body-parser لجميع routes باستثناء upload
+// استخدم body-parser لجميع routes باستثناء routes التي تستخدم FormData
 app.use((req, res, next) => {
   if (req.originalUrl === '/api/upload/image' && req.method === 'POST') {
     // تخطي body-parser لـ upload endpoint
+    next();
+  } else if (req.originalUrl === '/api/products/' && req.method === 'POST') {
+    // تخطي body-parser لـ products POST endpoint
+    next();
+  } else if (req.originalUrl.startsWith('/api/products/') && req.method === 'PUT') {
+    // تخطي body-parser لـ products PUT endpoint
     next();
   } else {
     // استخدام body-parser لباقي الـ endpoints
@@ -57,6 +63,10 @@ app.use((req, res, next) => {
 
 app.use((req, res, next) => {
   if (req.originalUrl === '/api/upload/image' && req.method === 'POST') {
+    next();
+  } else if (req.originalUrl === '/api/products/' && req.method === 'POST') {
+    next();
+  } else if (req.originalUrl.startsWith('/api/products/') && req.method === 'PUT') {
     next();
   } else {
     express.urlencoded({ extended: true, limit: '10mb' })(req, res, next);
