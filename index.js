@@ -18,7 +18,7 @@ let routesLoaded = {
   orders: false
 };
 
-// CORS configuration - UPDATED
+// CORS configuration
 const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:3000',
@@ -28,9 +28,7 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps, Postman, etc.)
     if (!origin) return callback(null, true);
-    
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
@@ -45,8 +43,26 @@ app.use(cors({
 // Handle preflight requests
 app.options('*', cors());
 
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// ======== التعديل الهام: body-parser مشروط ======== //
+// استخدم body-parser لجميع routes باستثناء upload
+app.use((req, res, next) => {
+  if (req.originalUrl === '/api/upload/image' && req.method === 'POST') {
+    // تخطي body-parser لـ upload endpoint
+    next();
+  } else {
+    // استخدام body-parser لباقي الـ endpoints
+    express.json({ limit: '10mb' })(req, res, next);
+  }
+});
+
+app.use((req, res, next) => {
+  if (req.originalUrl === '/api/upload/image' && req.method === 'POST') {
+    next();
+  } else {
+    express.urlencoded({ extended: true, limit: '10mb' })(req, res, next);
+  }
+});
+// ======== نهاية التعديل ======== //
 
 // Root API endpoint
 app.get('/api', (req, res) => {
@@ -277,13 +293,22 @@ app.get('/api/test', (req, res) => {
 // Image upload endpoint using busboy (works on Vercel)
 app.post('/api/upload/image', (req, res) => {
   try {
-    const bb = busboy({ headers: req.headers });
+    console.log('📤 Received upload request');
+    
+    const bb = busboy({ 
+      headers: req.headers,
+      limits: {
+        fileSize: 4.5 * 1024 * 1024 // 4.5MB limit
+      }
+    });
+    
     let imageBuffer = null;
     let mimeType = '';
     let fileSize = 0;
     let fileName = '';
 
     bb.on('file', (name, file, info) => {
+      console.log('📁 Processing file:', info.filename);
       const { filename, mimeType: fileMimeType } = info;
       mimeType = fileMimeType;
       fileName = filename || 'uploaded_image';
@@ -296,12 +321,14 @@ app.post('/api/upload/image', (req, res) => {
       
       file.on('end', () => {
         imageBuffer = Buffer.concat(chunks);
+        console.log(`✅ File processed: ${fileName}, size: ${fileSize} bytes`);
       });
     });
 
     bb.on('close', async () => {
       try {
         if (!imageBuffer) {
+          console.log('❌ No image buffer received');
           return res.status(400).json({
             error: 'Validation error',
             message: 'No image file uploaded'
@@ -309,6 +336,7 @@ app.post('/api/upload/image', (req, res) => {
         }
 
         if (!pool) {
+          console.log('❌ Database pool not available');
           return res.status(503).json({
             error: 'Service unavailable',
             message: 'Database connection not available'
@@ -317,6 +345,7 @@ app.post('/api/upload/image', (req, res) => {
 
         // Validate file type
         if (!mimeType.startsWith('image/')) {
+          console.log('❌ Invalid file type:', mimeType);
           return res.status(400).json({
             error: 'Invalid file type',
             message: 'Only image files are allowed'
@@ -325,6 +354,7 @@ app.post('/api/upload/image', (req, res) => {
 
         // Validate file size (4.5MB limit)
         if (fileSize > 4.5 * 1024 * 1024) {
+          console.log('❌ File too large:', fileSize);
           return res.status(400).json({
             error: 'File too large',
             message: 'Image size must be less than 4.5MB'
@@ -339,6 +369,8 @@ app.post('/api/upload/image', (req, res) => {
           [imageBuffer, mimeType, fileSize, fileName]
         );
 
+        console.log('✅ Image saved to database with ID:', result.rows[0].id);
+
         res.status(201).json({
           message: 'Image uploaded successfully',
           imageId: result.rows[0].id,
@@ -348,7 +380,7 @@ app.post('/api/upload/image', (req, res) => {
         });
 
       } catch (error) {
-        console.error('Upload error:', error);
+        console.error('❌ Upload error:', error);
         res.status(500).json({
           error: 'Server error',
           message: 'Failed to process image'
@@ -357,7 +389,7 @@ app.post('/api/upload/image', (req, res) => {
     });
 
     bb.on('error', (error) => {
-      console.error('Busboy error:', error);
+      console.error('❌ Busboy error:', error);
       res.status(500).json({
         error: 'Parse error',
         message: 'Failed to parse form data'
@@ -367,7 +399,7 @@ app.post('/api/upload/image', (req, res) => {
     req.pipe(bb);
 
   } catch (error) {
-    console.error('Image upload error:', error);
+    console.error('❌ Image upload error:', error);
     res.status(500).json({
       error: 'Server error',
       message: 'An error occurred while uploading the image'
