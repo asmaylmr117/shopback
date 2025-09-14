@@ -214,7 +214,7 @@ router.delete('/addresses/:id', authenticateToken, requireCustomerOrAdmin, async
 
 // Order Management
 
-// Get user orders (customer gets their own, admin gets all)
+// Get user orders (customer gets their own, admin gets all) - OPTIMIZED VERSION
 router.get('/', authenticateToken, requireCustomerOrAdmin, async (req, res) => {
   try {
     const { page = 1, limit = 10, status } = req.query;
@@ -269,6 +269,38 @@ router.get('/', authenticateToken, requireCustomerOrAdmin, async (req, res) => {
 
     const result = await pool.query(query, queryParams);
 
+    // Get items for all orders in a single optimized query
+    const orderIds = result.rows.map(order => order.id);
+    
+    let itemsResult = { rows: [] };
+    if (orderIds.length > 0) {
+      const itemsQuery = `
+        SELECT oi.*, p.name as product_name, p.image_url,
+               ENCODE(p.image_data, 'base64') as image_data
+        FROM order_items oi
+        LEFT JOIN products p ON oi.product_id = p.id
+        WHERE oi.order_id = ANY($1::int[])
+        ORDER BY oi.order_id, oi.id
+      `;
+      
+      itemsResult = await pool.query(itemsQuery, [orderIds]);
+    }
+
+    // Group items by order_id for efficient lookup
+    const itemsByOrderId = {};
+    itemsResult.rows.forEach(item => {
+      if (!itemsByOrderId[item.order_id]) {
+        itemsByOrderId[item.order_id] = [];
+      }
+      itemsByOrderId[item.order_id].push(item);
+    });
+
+    // Add items to each order
+    const ordersWithItems = result.rows.map(order => ({
+      ...order,
+      items: itemsByOrderId[order.id] || []
+    }));
+
     // Get total count for pagination
     let countQuery = 'SELECT COUNT(*) FROM orders WHERE 1=1';
     let countParams = [];
@@ -290,9 +322,11 @@ router.get('/', authenticateToken, requireCustomerOrAdmin, async (req, res) => {
     const totalOrders = parseInt(countResult.rows[0].count);
     const totalPages = Math.ceil(totalOrders / limitNum);
 
+    console.log('Orders with items response:', JSON.stringify(ordersWithItems, null, 2));
+
     res.json({
       message: 'Orders retrieved successfully',
-      orders: result.rows,
+      orders: ordersWithItems,
       pagination: {
         currentPage: pageNum,
         totalPages,
@@ -458,16 +492,20 @@ router.get('/:id', authenticateToken, requireCustomerOrAdmin, async (req, res) =
       });
     }
 
-    // Get order items
+    // Get order items with enhanced product information including image data
     const itemsResult = await pool.query(`
-      SELECT oi.*, p.name as product_name, p.image_url
+      SELECT oi.*, p.name as product_name, p.image_url,
+             ENCODE(p.image_data, 'base64') as image_data
       FROM order_items oi
       LEFT JOIN products p ON oi.product_id = p.id
       WHERE oi.order_id = $1
+      ORDER BY oi.id
     `, [id]);
 
     const order = orderResult.rows[0];
     order.items = itemsResult.rows;
+
+    console.log('Single order with items:', JSON.stringify(order, null, 2));
 
     res.json({
       message: 'Order retrieved successfully',
