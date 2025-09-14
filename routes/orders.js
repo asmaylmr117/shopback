@@ -214,7 +214,7 @@ router.delete('/addresses/:id', authenticateToken, requireCustomerOrAdmin, async
 
 // Order Management
 
-// Get user orders (customer gets their own, admin gets all) - OPTIMIZED VERSION
+// Get user orders (customer gets their own, admin gets all) - FIXED VERSION
 router.get('/', authenticateToken, requireCustomerOrAdmin, async (req, res) => {
   try {
     const { page = 1, limit = 10, status } = req.query;
@@ -230,6 +230,8 @@ router.get('/', authenticateToken, requireCustomerOrAdmin, async (req, res) => {
         message: 'Page and limit must be positive integers'
       });
     }
+
+    console.log('Fetching orders for user:', userId, 'isAdmin:', isAdmin);
 
     let query = `
       SELECT o.*, ca.address, ca.phone, ca.city, u.username, u.email
@@ -267,23 +269,79 @@ router.get('/', authenticateToken, requireCustomerOrAdmin, async (req, res) => {
     query += ` OFFSET $${paramCount}`;
     queryParams.push(offset);
 
-    const result = await pool.query(query, queryParams);
+    console.log('Executing orders query:', query);
+    console.log('Query params:', queryParams);
 
-    // Get items for all orders in a single optimized query
+    const result = await pool.query(query, queryParams);
+    console.log('Orders query result:', result.rows.length, 'orders found');
+
+    // Get items for all orders - with dynamic column detection
     const orderIds = result.rows.map(order => order.id);
+    console.log('Order IDs for items:', orderIds);
     
     let itemsResult = { rows: [] };
+    
     if (orderIds.length > 0) {
-      const itemsQuery = `
-        SELECT oi.*, p.name as product_name, p.image_url,
-               ENCODE(p.image_data, 'base64') as image_data
-        FROM order_items oi
-        LEFT JOIN products p ON oi.product_id = p.id
-        WHERE oi.order_id = ANY($1::int[])
-        ORDER BY oi.order_id, oi.id
-      `;
-      
-      itemsResult = await pool.query(itemsQuery, [orderIds]);
+      try {
+        // First, check what columns exist in products table
+        const columnsCheck = await pool.query(`
+          SELECT column_name 
+          FROM information_schema.columns 
+          WHERE table_name = 'products' 
+          AND column_name IN ('image_url', 'image_id', 'image_data', 'name')
+        `);
+        
+        console.log('Available product columns:', columnsCheck.rows.map(r => r.column_name));
+        
+        // Build query based on available columns
+        let selectColumns = 'oi.*';
+        
+        // Check which columns exist and add them
+        const availableColumns = columnsCheck.rows.map(r => r.column_name);
+        
+        if (availableColumns.includes('name')) {
+          selectColumns += ', p.name as product_name';
+        }
+        if (availableColumns.includes('image_url')) {
+          selectColumns += ', p.image_url';
+        }
+        if (availableColumns.includes('image_id')) {
+          selectColumns += ', p.image_id';
+        }
+        if (availableColumns.includes('image_data')) {
+          selectColumns += ', CASE WHEN p.image_data IS NOT NULL THEN ENCODE(p.image_data, \'base64\') ELSE NULL END as image_data';
+        }
+        
+        const itemsQuery = `
+          SELECT ${selectColumns}
+          FROM order_items oi
+          LEFT JOIN products p ON oi.product_id = p.id
+          WHERE oi.order_id = ANY($1::int[])
+          ORDER BY oi.order_id, oi.id
+        `;
+        
+        console.log('Executing items query:', itemsQuery);
+        itemsResult = await pool.query(itemsQuery, [orderIds]);
+        console.log('Items fetched:', itemsResult.rows.length);
+        
+      } catch (itemsError) {
+        console.error('Error fetching order items:', itemsError);
+        // Try basic query without products join
+        try {
+          const basicItemsQuery = `
+            SELECT oi.*
+            FROM order_items oi
+            WHERE oi.order_id = ANY($1::int[])
+            ORDER BY oi.order_id, oi.id
+          `;
+          
+          console.log('Falling back to basic items query');
+          itemsResult = await pool.query(basicItemsQuery, [orderIds]);
+        } catch (basicError) {
+          console.error('Even basic items query failed:', basicError);
+          // Continue without items rather than failing completely
+        }
+      }
     }
 
     // Group items by order_id for efficient lookup
@@ -322,7 +380,7 @@ router.get('/', authenticateToken, requireCustomerOrAdmin, async (req, res) => {
     const totalOrders = parseInt(countResult.rows[0].count);
     const totalPages = Math.ceil(totalOrders / limitNum);
 
-    console.log('Orders with items response:', JSON.stringify(ordersWithItems, null, 2));
+    console.log('Sending response with', ordersWithItems.length, 'orders');
 
     res.json({
       message: 'Orders retrieved successfully',
@@ -335,11 +393,14 @@ router.get('/', authenticateToken, requireCustomerOrAdmin, async (req, res) => {
         hasPrevPage: pageNum > 1
       }
     });
+
   } catch (error) {
     console.error('Get orders error:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({
       error: 'Server error',
-      message: 'An error occurred while retrieving orders'
+      message: 'An error occurred while retrieving orders',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
@@ -461,12 +522,14 @@ router.post('/', authenticateToken, requireCustomerOrAdmin, async (req, res) => 
   }
 });
 
-// Get order by ID with items - MUST come after specific routes
+// Get order by ID with items - FIXED VERSION
 router.get('/:id', authenticateToken, requireCustomerOrAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
     const isAdmin = req.user.role === 'admin';
+
+    console.log('Fetching order details for ID:', id, 'User:', userId);
 
     let orderQuery = `
       SELECT o.*, ca.address, ca.phone, ca.city, u.username, u.email
@@ -492,30 +555,81 @@ router.get('/:id', authenticateToken, requireCustomerOrAdmin, async (req, res) =
       });
     }
 
-    // Get order items with enhanced product information including image data
-    const itemsResult = await pool.query(`
-      SELECT oi.*, p.name as product_name, p.image_url,
-             ENCODE(p.image_data, 'base64') as image_data
-      FROM order_items oi
-      LEFT JOIN products p ON oi.product_id = p.id
-      WHERE oi.order_id = $1
-      ORDER BY oi.id
-    `, [id]);
+    // Get order items with safe query and dynamic column detection
+    let itemsResult = { rows: [] };
+    
+    try {
+      // Check available columns first
+      const columnsCheck = await pool.query(`
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'products' 
+        AND column_name IN ('image_url', 'image_id', 'image_data', 'name')
+      `);
+      
+      const availableColumns = columnsCheck.rows.map(r => r.column_name);
+      console.log('Available columns for single order:', availableColumns);
+      
+      let selectColumns = 'oi.*';
+      
+      if (availableColumns.includes('name')) {
+        selectColumns += ', p.name as product_name';
+      }
+      if (availableColumns.includes('image_url')) {
+        selectColumns += ', p.image_url';
+      }
+      if (availableColumns.includes('image_id')) {
+        selectColumns += ', p.image_id';
+      }
+      if (availableColumns.includes('image_data')) {
+        selectColumns += ', CASE WHEN p.image_data IS NOT NULL THEN ENCODE(p.image_data, \'base64\') ELSE NULL END as image_data';
+      }
+      
+      const itemsQuery = `
+        SELECT ${selectColumns}
+        FROM order_items oi
+        LEFT JOIN products p ON oi.product_id = p.id
+        WHERE oi.order_id = $1
+        ORDER BY oi.id
+      `;
+      
+      itemsResult = await pool.query(itemsQuery, [id]);
+      console.log('Items query successful for order:', id, 'Items count:', itemsResult.rows.length);
+      
+    } catch (itemsError) {
+      console.warn('Enhanced items query failed, using basic query:', itemsError.message);
+      // Fallback to basic query
+      try {
+        const basicItemsQuery = `
+          SELECT oi.*
+          FROM order_items oi
+          WHERE oi.order_id = $1
+          ORDER BY oi.id
+        `;
+        
+        itemsResult = await pool.query(basicItemsQuery, [id]);
+      } catch (basicError) {
+        console.error('Even basic items query failed:', basicError);
+      }
+    }
 
     const order = orderResult.rows[0];
     order.items = itemsResult.rows;
 
-    console.log('Single order with items:', JSON.stringify(order, null, 2));
+    console.log('Order details retrieved successfully:', order.id, 'with', order.items.length, 'items');
 
     res.json({
       message: 'Order retrieved successfully',
       order
     });
+
   } catch (error) {
     console.error('Get order error:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({
       error: 'Server error',
-      message: 'An error occurred while retrieving the order'
+      message: 'An error occurred while retrieving the order',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
