@@ -132,15 +132,16 @@ router.put('/addresses/:id', authenticateToken, requireCustomerOrAdmin, async (r
     // Build update query dynamically
     let updateFields = [];
     let queryParams = [];
-    let paramCount = 0;
+    let paramCount = 1;
 
     const fields = { address, phone, city, is_default };
 
+    // Map fields to valid column names to prevent SQL injection
     Object.entries(fields).forEach(([key, value]) => {
       if (value !== undefined) {
-        paramCount++;
         updateFields.push(`${key} = $${paramCount}`);
         queryParams.push(value);
+        paramCount++;
       }
     });
 
@@ -152,15 +153,13 @@ router.put('/addresses/:id', authenticateToken, requireCustomerOrAdmin, async (r
     }
 
     // Add address ID and user ID for WHERE clause
-    paramCount++;
     queryParams.push(id);
-    paramCount++;
     queryParams.push(userId);
 
     const query = `
       UPDATE customer_addresses 
       SET ${updateFields.join(', ')}
-      WHERE id = $$  {paramCount - 1} AND user_id =   $${paramCount}
+      WHERE id = $${paramCount} AND user_id = $${paramCount + 1}
       RETURNING *
     `;
 
@@ -221,7 +220,17 @@ router.get('/', authenticateToken, requireCustomerOrAdmin, async (req, res) => {
     const { page = 1, limit = 10, status } = req.query;
     const userId = req.user.id;
     const isAdmin = req.user.role === 'admin';
-    
+
+    // Validate pagination parameters
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    if (isNaN(pageNum) || pageNum < 1 || isNaN(limitNum) || limitNum < 1) {
+      return res.status(400).json({
+        error: 'Validation error',
+        message: 'Page and limit must be positive integers'
+      });
+    }
+
     let query = `
       SELECT o.*, ca.address, ca.phone, ca.city, u.username, u.email
       FROM orders o
@@ -247,12 +256,12 @@ router.get('/', authenticateToken, requireCustomerOrAdmin, async (req, res) => {
     }
 
     // Add pagination
-    const offset = (page - 1) * limit;
+    const offset = (pageNum - 1) * limitNum;
     query += ` ORDER BY o.created_at DESC`;
     
     paramCount++;
     query += ` LIMIT $${paramCount}`;
-    queryParams.push(limit);
+    queryParams.push(limitNum);
     
     paramCount++;
     query += ` OFFSET $${paramCount}`;
@@ -279,17 +288,17 @@ router.get('/', authenticateToken, requireCustomerOrAdmin, async (req, res) => {
 
     const countResult = await pool.query(countQuery, countParams);
     const totalOrders = parseInt(countResult.rows[0].count);
-    const totalPages = Math.ceil(totalOrders / limit);
+    const totalPages = Math.ceil(totalOrders / limitNum);
 
     res.json({
       message: 'Orders retrieved successfully',
       orders: result.rows,
       pagination: {
-        currentPage: parseInt(page),
+        currentPage: pageNum,
         totalPages,
         totalOrders,
-        hasNextPage: page < totalPages,
-        hasPrevPage: page > 1
+        hasNextPage: pageNum < totalPages,
+        hasPrevPage: pageNum > 1
       }
     });
   } catch (error) {
