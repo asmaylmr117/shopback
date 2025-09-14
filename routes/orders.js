@@ -146,12 +146,14 @@ router.get('/', authenticateToken, requireCustomerOrAdmin, async (req, res) => {
     }
 
     const orderIds = orders.map(order => order.id);
+    // --- FIX START: Removed p.image_url from the query ---
     const itemsResult = await pool.query(`
-      SELECT oi.*, p.name as product_name, p.image_url, p.image_data
+      SELECT oi.*, p.name as product_name, p.image_data
       FROM order_items oi
       LEFT JOIN products p ON oi.product_id = p.id
       WHERE oi.order_id = ANY($1::int[])
     `, [orderIds]);
+    // --- FIX END ---
 
     const itemsByOrderId = itemsResult.rows.reduce((acc, item) => {
       if (!acc[item.order_id]) acc[item.order_id] = [];
@@ -265,12 +267,14 @@ router.get('/:id', authenticateToken, requireCustomerOrAdmin, async (req, res) =
       return res.status(404).json({ error: 'Order not found', message: 'Order not found or you do not have access to it.' });
     }
 
+    // --- FIX START: Removed p.image_url from the query ---
     const itemsResult = await pool.query(`
-      SELECT oi.*, p.name as product_name, p.image_url, p.image_data
+      SELECT oi.*, p.name as product_name, p.image_data
       FROM order_items oi
       LEFT JOIN products p ON oi.product_id = p.id
       WHERE oi.order_id = $1
     `, [id]);
+    // --- FIX END ---
 
     const order = { ...orderResult.rows[0], items: itemsResult.rows };
     res.json({ message: 'Order retrieved successfully', order });
