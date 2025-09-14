@@ -18,38 +18,8 @@ let routesLoaded = {
   orders: false
 };
 
-const allowedOrigins = [
-  'http://localhost:5173',
-  'http://localhost:3000',
-  'https://shopbackco.vercel.app',
-  'https://yourfrontenddomain.com' 
-];
-
-const corsOptions = {
-  origin: function (origin, callback) {
-   
-    if (!origin) {
-      return callback(null, true);
-    }
-
-   
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-
-   
-    return callback(new Error('Not allowed by CORS'));
-  },
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
-};
-
-
-app.use(cors(corsOptions));
-
-
-app.use(express.json());
+ const allowedOrigins = [ 'http://localhost:5173', 'http://localhost:3000', 'https://shopbackco.vercel.app', 'https://yourfrontenddomain.com' ];
+app.use(cors({ origin: function (origin, callback) { if (!origin) return callback(null, true); if (allowedOrigins.indexOf(origin) !== -1) { callback(null, true); } else { callback(new Error('Not allowed by CORS')); } }, methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], credentials: true, allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'] }));
 
 app.options('*', cors());
 
