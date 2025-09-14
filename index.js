@@ -18,29 +18,39 @@ let routesLoaded = {
   orders: false
 };
 
-// CORS configuration
 const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:3000',
   'https://shopbackco.vercel.app',
-  'https://yourfrontenddomain.com'
+  'https://yourfrontenddomain.com' 
 ];
 
-app.use(cors({
+const corsOptions = {
   origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
+   
+    if (!origin) {
+      return callback(null, true);
     }
+
+   
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+   
+    return callback(new Error('Not allowed by CORS'));
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
-}));
+};
 
-// Handle preflight requests
+
+app.use(cors(corsOptions));
+
+
+app.use(express.json());
+
 app.options('*', cors());
 
 // ======== التعديل الهام: body-parser مشروط ======== //
