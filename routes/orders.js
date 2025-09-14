@@ -4,561 +4,326 @@ const { authenticateToken, requireAdmin, requireCustomerOrAdmin } = require('../
 
 const router = express.Router();
 
-// Customer Address Management - PUT SPECIFIC ROUTES FIRST
-
-// Get order statistics (admin only) - SPECIFIC ROUTE FIRST
-router.get('/stats/summary', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const totalOrdersResult = await pool.query('SELECT COUNT(*) as total FROM orders');
-    const totalRevenueResult = await pool.query('SELECT SUM(total_price) as revenue FROM orders WHERE payment_status = $1', ['paid']);
-    const statusDistResult = await pool.query(`
-      SELECT status, COUNT(*) as count 
-      FROM orders 
-      GROUP BY status 
-      ORDER BY count DESC
-    `);
-    const paymentDistResult = await pool.query(`
-      SELECT payment_status, COUNT(*) as count 
-      FROM orders 
-      GROUP BY payment_status 
-      ORDER BY count DESC
-    `);
-
-    res.json({
-      message: 'Order statistics retrieved successfully',
-      stats: {
-        totalOrders: parseInt(totalOrdersResult.rows[0].total),
-        totalRevenue: parseFloat(totalRevenueResult.rows[0].revenue || 0),
-        statusDistribution: statusDistResult.rows,
-        paymentDistribution: paymentDistResult.rows
-      }
-    });
-  } catch (error) {
-    console.error('Get order stats error:', error);
-    res.status(500).json({
-      error: 'Server error',
-      message: 'An error occurred while retrieving order statistics'
-    });
-  }
-});
+// --- Customer Address Management ---
+// إدارة عناوين العميل
 
 // Get customer addresses
+// جلب عناوين العميل
 router.get('/addresses', authenticateToken, requireCustomerOrAdmin, async (req, res) => {
-  try {
-    const userId = req.user.id;
-
-    const result = await pool.query(`
-      SELECT * FROM customer_addresses 
-      WHERE user_id = $1 
-      ORDER BY is_default DESC, created_at DESC
-    `, [userId]);
-
-    res.json({
-      message: 'Addresses retrieved successfully',
-      addresses: result.rows
-    });
-  } catch (error) {
-    console.error('Get addresses error:', error);
-    res.status(500).json({
-      error: 'Server error',
-      message: 'An error occurred while retrieving addresses'
-    });
-  }
+  try {
+    const userId = req.user.id;
+    const result = await pool.query('SELECT * FROM customer_addresses WHERE user_id = $1 ORDER BY is_default DESC, created_at DESC', [userId]);
+    res.json({ message: 'Addresses retrieved successfully', addresses: result.rows });
+  } catch (error) {
+    console.error('Get addresses error:', error);
+    res.status(500).json({ error: 'Server error', message: 'An error occurred while retrieving addresses' });
+  }
 });
 
 // Add new address
+// إضافة عنوان جديد
 router.post('/addresses', authenticateToken, requireCustomerOrAdmin, async (req, res) => {
-  try {
-    const { address, phone, city, is_default = false } = req.body;
-    const userId = req.user.id;
+  try {
+    const { address, phone, city, is_default = false } = req.body;
+    const userId = req.user.id;
 
-    // Validate required fields
-    if (!address || !phone || !city) {
-      return res.status(400).json({
-        error: 'Validation error',
-        message: 'Address, phone, and city are required'
-      });
-    }
+    if (!address || !phone || !city) {
+      return res.status(400).json({ error: 'Validation error', message: 'Address, phone, and city are required' });
+    }
 
-    // If this is set as default, unset other default addresses
-    if (is_default) {
-      await pool.query('UPDATE customer_addresses SET is_default = false WHERE user_id = $1', [userId]);
-    }
+    if (is_default) {
+      await pool.query('UPDATE customer_addresses SET is_default = false WHERE user_id = $1', [userId]);
+    }
 
-    const result = await pool.query(`
-      INSERT INTO customer_addresses (user_id, address, phone, city, is_default)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING *
-    `, [userId, address, phone, city, is_default]);
-
-    res.status(201).json({
-      message: 'Address created successfully',
-      address: result.rows[0]
-    });
-  } catch (error) {
-    console.error('Create address error:', error);
-    res.status(500).json({
-      error: 'Server error',
-      message: 'An error occurred while creating the address'
-    });
-  }
+    const result = await pool.query(
+      'INSERT INTO customer_addresses (user_id, address, phone, city, is_default) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      [userId, address, phone, city, is_default]
+    );
+    res.status(201).json({ message: 'Address created successfully', address: result.rows[0] });
+  } catch (error) {
+    console.error('Create address error:', error);
+    res.status(500).json({ error: 'Server error', message: 'An error occurred while creating the address' });
+  }
 });
 
-// Update address
+// Update address (More flexible)
+// تحديث العنوان (أكثر مرونة)
 router.put('/addresses/:id', authenticateToken, requireCustomerOrAdmin, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { address, phone, city, is_default } = req.body;
+  try {
+    const { id } = req.params;
     const userId = req.user.id;
+    const { address, phone, city, is_default } = req.body;
 
-    // Check if address exists and belongs to user
-    const existingAddress = await pool.query(
-      'SELECT * FROM customer_addresses WHERE id = $1 AND user_id = $2',
-      [id, userId]
-    );
-    
-    if (existingAddress.rows.length === 0) {
-      return res.status(404).json({
-        error: 'Address not found',
-        message: 'Address with the specified ID does not exist or does not belong to you'
-      });
-    }
+    const existingAddress = await pool.query('SELECT * FROM customer_addresses WHERE id = $1 AND user_id = $2', [id, userId]);
+    if (existingAddress.rows.length === 0) {
+      return res.status(404).json({ error: 'Address not found', message: 'Address not found or does not belong to you.' });
+    }
 
-    // If this is set as default, unset other default addresses
-    if (is_default) {
-      await pool.query('UPDATE customer_addresses SET is_default = false WHERE user_id = $1', [userId]);
-    }
-
-    // Build update query dynamically
-    let updateFields = [];
-    let queryParams = [];
-    let paramCount = 0;
+    if (is_default === true) {
+      await pool.query('UPDATE customer_addresses SET is_default = false WHERE user_id = $1 AND id != $2', [userId, id]);
+    }
 
     const fields = { address, phone, city, is_default };
-
-    Object.entries(fields).forEach(([key, value]) => {
-      if (value !== undefined) {
-        paramCount++;
-        updateFields.push(`${key} = $${paramCount}`);
-        queryParams.push(value);
-      }
-    });
+    const updateFields = Object.keys(fields)
+      .filter(key => fields[key] !== undefined)
+      .map((key, index) => `${key} = $${index + 1}`)
+      .join(', ');
 
     if (updateFields.length === 0) {
-      return res.status(400).json({
-        error: 'Validation error',
-        message: 'At least one field must be provided for update'
-      });
+        return res.status(400).json({ error: 'Bad Request', message: 'No fields to update provided.' });
     }
 
-    // Add address ID and user ID for WHERE clause
-    paramCount++;
-    queryParams.push(id);
-    paramCount++;
-    queryParams.push(userId);
+    const queryParams = Object.values(fields).filter(value => value !== undefined);
+    queryParams.push(id, userId);
 
-    const query = `
-      UPDATE customer_addresses 
-      SET ${updateFields.join(', ')}
-      WHERE id = $${paramCount - 1} AND user_id = $${paramCount}
-      RETURNING *
-    `;
-
-    const result = await pool.query(query, queryParams);
-
-    res.json({
-      message: 'Address updated successfully',
-      address: result.rows[0]
-    });
-  } catch (error) {
-    console.error('Update address error:', error);
-    res.status(500).json({
-      error: 'Server error',
-      message: 'An error occurred while updating the address'
-    });
-  }
+    const result = await pool.query(
+      `UPDATE customer_addresses SET ${updateFields} WHERE id = $${queryParams.length - 1} AND user_id = $${queryParams.length} RETURNING *`,
+      queryParams
+    );
+    res.json({ message: 'Address updated successfully', address: result.rows[0] });
+  } catch (error) {
+    console.error('Update address error:', error);
+    res.status(500).json({ error: 'Server error', message: 'An error occurred while updating the address' });
+  }
 });
 
 // Delete address
+// حذف العنوان
 router.delete('/addresses/:id', authenticateToken, requireCustomerOrAdmin, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const userId = req.user.id;
-
-    // Check if address exists and belongs to user
-    const existingAddress = await pool.query(
-      'SELECT * FROM customer_addresses WHERE id = $1 AND user_id = $2',
-      [id, userId]
-    );
-    
-    if (existingAddress.rows.length === 0) {
-      return res.status(404).json({
-        error: 'Address not found',
-        message: 'Address with the specified ID does not exist or does not belong to you'
-      });
-    }
-
-    await pool.query('DELETE FROM customer_addresses WHERE id = $1 AND user_id = $2', [id, userId]);
-
-    res.json({
-      message: 'Address deleted successfully',
-      deletedAddress: existingAddress.rows[0]
-    });
-  } catch (error) {
-    console.error('Delete address error:', error);
-    res.status(500).json({
-      error: 'Server error',
-      message: 'An error occurred while deleting the address'
-    });
-  }
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+    const result = await pool.query('DELETE FROM customer_addresses WHERE id = $1 AND user_id = $2 RETURNING *', [id, userId]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Address not found', message: 'Address not found or does not belong to you.' });
+    }
+    res.json({ message: 'Address deleted successfully', deletedAddress: result.rows[0] });
+  } catch (error) {
+    console.error('Delete address error:', error);
+    res.status(500).json({ error: 'Server error', message: 'An error occurred while deleting the address' });
+  }
 });
 
-// Order Management
 
-// Get user orders (customer gets their own, admin gets all)
+// --- Order Management ---
+// إدارة الطلبات
+
+// Get user orders (customer gets their own, admin gets all) - EFFICIENT & SECURE VERSION
+// جلب طلبات المستخدم (العميل يحصل على طلباته، والمدير يحصل على جميع الطلبات) - نسخة محسنة وآمنة
 router.get('/', authenticateToken, requireCustomerOrAdmin, async (req, res) => {
-  try {
-    const { page = 1, limit = 10, status } = req.query;
-    const userId = req.user.id;
-    const isAdmin = req.user.role === 'admin';
-    
-    let query = `
-      SELECT o.*, ca.address, ca.phone, ca.city, u.username, u.email
-      FROM orders o
-      LEFT JOIN customer_addresses ca ON o.address_id = ca.id
-      LEFT JOIN users u ON o.user_id = u.id
-      WHERE 1=1
-    `;
+  try {
+    const { page = 1, limit = 10, status } = req.query;
+    const userId = req.user.id;
+    const isAdmin = req.user.role === 'admin';
+    
+    let baseQuery = `FROM orders o LEFT JOIN customer_addresses ca ON o.address_id = ca.id LEFT JOIN users u ON o.user_id = u.id WHERE 1=1`;
+    let countParams = [];
     let queryParams = [];
-    let paramCount = 0;
 
-    // If not admin, only show user's own orders
-    if (!isAdmin) {
-      paramCount++;
-      query += ` AND o.user_id = $${paramCount}`;
-      queryParams.push(userId);
-    }
+    if (!isAdmin) {
+      baseQuery += ` AND o.user_id = $${queryParams.length + 1}`;
+      queryParams.push(userId);
+    }
+    if (status) {
+      baseQuery += ` AND o.status = $${queryParams.length + 1}`;
+      queryParams.push(status);
+    }
+    countParams = [...queryParams];
 
-    // Filter by status if provided
-    if (status) {
-      paramCount++;
-      query += ` AND o.status = $${paramCount}`;
-      queryParams.push(status);
-    }
+    const offset = (page - 1) * limit;
+    const orderQuery = `SELECT o.*, ca.address, ca.phone, ca.city, u.username, u.email ${baseQuery} ORDER BY o.created_at DESC LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}`;
+    queryParams.push(limit, offset);
 
-    // Add pagination
-    const offset = (page - 1) * limit;
-    query += ` ORDER BY o.created_at DESC`;
+    const orderResult = await pool.query(orderQuery, queryParams);
+    const orders = orderResult.rows;
     
-    paramCount++;
-    query += ` LIMIT $${paramCount}`;
-    queryParams.push(limit);
-    
-    paramCount++;
-    query += ` OFFSET $${paramCount}`;
-    queryParams.push(offset);
-
-    const result = await pool.query(query, queryParams);
-
-    // Get total count for pagination
-    let countQuery = 'SELECT COUNT(*) FROM orders WHERE 1=1';
-    let countParams = [];
-    let countParamCount = 0;
-
-    if (!isAdmin) {
-      countParamCount++;
-      countQuery += ` AND user_id = $${countParamCount}`;
-      countParams.push(userId);
-    }
-
-    if (status) {
-      countParamCount++;
-      countQuery += ` AND status = $${countParamCount}`;
-      countParams.push(status);
-    }
-
-    const countResult = await pool.query(countQuery, countParams);
+    const countResult = await pool.query(`SELECT COUNT(*) ${baseQuery}`, countParams);
     const totalOrders = parseInt(countResult.rows[0].count);
     const totalPages = Math.ceil(totalOrders / limit);
 
-    res.json({
-      message: 'Orders retrieved successfully',
-      orders: result.rows,
-      pagination: {
-        currentPage: parseInt(page),
-        totalPages,
-        totalOrders,
-        hasNextPage: page < totalPages,
-        hasPrevPage: page > 1
-      }
-    });
-  } catch (error) {
-    console.error('Get orders error:', error);
-    res.status(500).json({
-      error: 'Server error',
-      message: 'An error occurred while retrieving orders'
-    });
-  }
+    if (orders.length === 0) {
+        return res.json({ message: 'Orders retrieved successfully', orders: [], pagination: { currentPage: parseInt(page), totalPages, totalOrders } });
+    }
+
+    const orderIds = orders.map(order => order.id);
+    const itemsResult = await pool.query(`
+      SELECT oi.*, p.name as product_name, p.image_url, p.image_data
+      FROM order_items oi
+      LEFT JOIN products p ON oi.product_id = p.id
+      WHERE oi.order_id = ANY($1::int[])
+    `, [orderIds]);
+
+    const itemsByOrderId = itemsResult.rows.reduce((acc, item) => {
+      if (!acc[item.order_id]) acc[item.order_id] = [];
+      acc[item.order_id].push(item);
+      return acc;
+    }, {});
+
+    const ordersWithItems = orders.map(order => ({
+      ...order,
+      items: itemsByOrderId[order.id] || []
+    }));
+
+    res.json({ message: 'Orders retrieved successfully', orders: ordersWithItems, pagination: { currentPage: parseInt(page), totalPages, totalOrders } });
+  } catch (error) {
+    console.error('Get orders error:', error);
+    res.status(500).json({ error: 'Server error', message: 'An error occurred while retrieving orders' });
+  }
 });
 
 // Create new order
+// إنشاء طلب جديد
 router.post('/', authenticateToken, requireCustomerOrAdmin, async (req, res) => {
-  try {
-    const { address_id, items } = req.body;
-    const userId = req.user.id;
+  try {
+    const { address_id, items } = req.body;
+    const userId = req.user.id;
 
-    // Validate required fields
-    if (!address_id || !items || !Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({
-        error: 'Validation error',
-        message: 'Address ID and items array are required'
-      });
-    }
+    if (!address_id || !items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'Validation error', message: 'Address ID and a non-empty items array are required' });
+    }
 
-    // Verify address belongs to user
-    const addressResult = await pool.query(
-      'SELECT * FROM customer_addresses WHERE id = $1 AND user_id = $2',
-      [address_id, userId]
-    );
+    const addressResult = await pool.query('SELECT * FROM customer_addresses WHERE id = $1 AND user_id = $2', [address_id, userId]);
+    if (addressResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Address not found', message: 'Address not found or does not belong to you.' });
+    }
 
-    if (addressResult.rows.length === 0) {
-      return res.status(404).json({
-        error: 'Address not found',
-        message: 'Address with the specified ID does not exist or does not belong to you'
-      });
-    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      let totalPrice = 0;
+      const orderItemsData = [];
 
-    // Start transaction
-    const client = await pool.connect();
-    
-    try {
-      await client.query('BEGIN');
-
-      let totalPrice = 0;
-      const orderItems = [];
-
-      // Validate items and calculate total
-      for (const item of items) {
-        const { product_id, quantity } = item;
-
+      for (const item of items) {
+        const { product_id, quantity } = item;
         if (!product_id || !quantity || quantity <= 0) {
-          throw new Error('Each item must have a valid product_id and positive quantity');
+          throw new Error('Each item must have a valid product_id and a positive quantity.');
         }
-
-        // Get product details
-        const productResult = await client.query('SELECT * FROM products WHERE id = $1', [product_id]);
-        
-        if (productResult.rows.length === 0) {
-          throw new Error(`Product with ID ${product_id} not found`);
-        }
-
-        const product = productResult.rows[0];
-        
-        // Check stock
-        if (product.stock_quantity < quantity) {
-          throw new Error(`Insufficient stock for product ${product.name}. Available: ${product.stock_quantity}, Requested: ${quantity}`);
-        }
-
-        const price = product.price * (1 - product.discount / 100);
+        const productResult = await client.query('SELECT * FROM products WHERE id = $1 FOR UPDATE', [product_id]);
+        if (productResult.rows.length === 0) throw new Error(`Product with ID ${product_id} not found`);
+        const product = productResult.rows[0];
+        if (product.stock_quantity < quantity) throw new Error(`Insufficient stock for ${product.name}. Available: ${product.stock_quantity}, Requested: ${quantity}`);
+        
+        const price = product.price * (1 - (product.discount || 0) / 100);
         const subtotal = price * quantity;
-        totalPrice += subtotal;
+        totalPrice += subtotal;
+        orderItemsData.push({ product_id, quantity, price, subtotal, name: product.name });
+        await client.query('UPDATE products SET stock_quantity = stock_quantity - $1 WHERE id = $2', [quantity, product_id]);
+      }
 
-        orderItems.push({
-          product_id,
-          quantity,
-          price,
-          subtotal
-        });
+      const orderResult = await client.query(
+        'INSERT INTO orders (user_id, address_id, total_price, status, payment_status) VALUES ($1, $2, $3, \'pending\', \'unpaid\') RETURNING *',
+        [userId, address_id, totalPrice]
+      );
+      const newOrder = orderResult.rows[0];
 
-        // Update stock
-        await client.query(
-          'UPDATE products SET stock_quantity = stock_quantity - $1 WHERE id = $2',
-          [quantity, product_id]
+      const itemQueries = orderItemsData.map(item => {
+        return client.query(
+          'INSERT INTO order_items (order_id, product_id, quantity, price, subtotal) VALUES ($1, $2, $3, $4, $5)',
+          [newOrder.id, item.product_id, item.quantity, item.price, item.subtotal]
         );
-      }
-
-      // Create order
-      const orderResult = await client.query(`
-        INSERT INTO orders (user_id, address_id, total_price, status, payment_status)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING *
-      `, [userId, address_id, totalPrice, 'pending', 'unpaid']);
-
-      const order = orderResult.rows[0];
-
-      // Create order items
-      for (const item of orderItems) {
-        await client.query(`
-          INSERT INTO order_items (order_id, product_id, quantity, price, subtotal)
-          VALUES ($1, $2, $3, $4, $5)
-        `, [order.id, item.product_id, item.quantity, item.price, item.subtotal]);
-      }
-
-      await client.query('COMMIT');
-
-      res.status(201).json({
-        message: 'Order created successfully',
-        order: {
-          ...order,
-          items: orderItems
-        }
       });
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-  } catch (error) {
-    console.error('Create order error:', error);
-    res.status(500).json({
-      error: 'Server error',
-      message: error.message || 'An error occurred while creating the order'
-    });
-  }
+      await Promise.all(itemQueries);
+
+      await client.query('COMMIT');
+      res.status(201).json({ message: 'Order created successfully', order: { ...newOrder, items: orderItemsData } });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Create order error:', error);
+    res.status(500).json({ error: 'Server error', message: error.message || 'An error occurred while creating the order' });
+  }
 });
 
-// Get order by ID with items - MUST come after specific routes
+// Get order by ID with items
+// جلب طلب محدد بواسطة الـ ID مع المنتجات
 router.get('/:id', authenticateToken, requireCustomerOrAdmin, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const userId = req.user.id;
-    const isAdmin = req.user.role === 'admin';
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+    const isAdmin = req.user.role === 'admin';
 
-    let orderQuery = `
-      SELECT o.*, ca.address, ca.phone, ca.city, u.username, u.email
-      FROM orders o
-      LEFT JOIN customer_addresses ca ON o.address_id = ca.id
-      LEFT JOIN users u ON o.user_id = u.id
-      WHERE o.id = $1
-    `;
-    let orderParams = [id];
+    let orderQuery = `
+      SELECT o.*, ca.address, ca.phone, ca.city, u.username, u.email
+      FROM orders o
+      LEFT JOIN customer_addresses ca ON o.address_id = ca.id
+      LEFT JOIN users u ON o.user_id = u.id
+      WHERE o.id = $1
+    `;
+    let orderParams = [id];
 
-    // If not admin, only allow access to own orders
-    if (!isAdmin) {
-      orderQuery += ' AND o.user_id = $2';
-      orderParams.push(userId);
-    }
+    if (!isAdmin) {
+      orderQuery += ' AND o.user_id = $2';
+      orderParams.push(userId);
+    }
 
-    const orderResult = await pool.query(orderQuery, orderParams);
+    const orderResult = await pool.query(orderQuery, orderParams);
+    if (orderResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Order not found', message: 'Order not found or you do not have access to it.' });
+    }
 
-    if (orderResult.rows.length === 0) {
-      return res.status(404).json({
-        error: 'Order not found',
-        message: 'Order with the specified ID does not exist or you do not have access to it'
-      });
-    }
+    const itemsResult = await pool.query(`
+      SELECT oi.*, p.name as product_name, p.image_url, p.image_data
+      FROM order_items oi
+      LEFT JOIN products p ON oi.product_id = p.id
+      WHERE oi.order_id = $1
+    `, [id]);
 
-    // Get order items
-    const itemsResult = await pool.query(`
-      SELECT oi.*, p.name as product_name, p.image_url
-      FROM order_items oi
-      LEFT JOIN products p ON oi.product_id = p.id
-      WHERE oi.order_id = $1
-    `, [id]);
-
-    const order = orderResult.rows[0];
-    order.items = itemsResult.rows;
-
-    res.json({
-      message: 'Order retrieved successfully',
-      order
-    });
-  } catch (error) {
-    console.error('Get order error:', error);
-    res.status(500).json({
-      error: 'Server error',
-      message: 'An error occurred while retrieving the order'
-    });
-  }
+    const order = { ...orderResult.rows[0], items: itemsResult.rows };
+    res.json({ message: 'Order retrieved successfully', order });
+  } catch (error) {
+    console.error('Get order by ID error:', error);
+    res.status(500).json({ error: 'Server error', message: 'An error occurred while retrieving the order' });
+  }
 });
 
 // Update order status (admin only)
+// تحديث حالة الطلب (للمدير فقط)
 router.put('/:id/status', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status, payment_status } = req.body;
-
-    // Validate status values
-    const validStatuses = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
+  try {
+    const { id } = req.params;
+    const { status, payment_status } = req.body;
+    const validOrderStatuses = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
     const validPaymentStatuses = ['unpaid', 'paid', 'refunded'];
 
-    if (status && !validStatuses.includes(status)) {
-      return res.status(400).json({
-        error: 'Validation error',
-        message: `Status must be one of: ${validStatuses.join(', ')}`
-      });
+    if (status && !validOrderStatuses.includes(status)) {
+        return res.status(400).json({ error: 'Validation Error', message: `Invalid order status. Must be one of: ${validOrderStatuses.join(', ')}` });
     }
-
     if (payment_status && !validPaymentStatuses.includes(payment_status)) {
-      return res.status(400).json({
-        error: 'Validation error',
-        message: `Payment status must be one of: ${validPaymentStatuses.join(', ')}`
-      });
+        return res.status(400).json({ error: 'Validation Error', message: `Invalid payment status. Must be one of: ${validPaymentStatuses.join(', ')}` });
     }
 
-    // Check if order exists
-    const existingOrder = await pool.query('SELECT * FROM orders WHERE id = $1', [id]);
-    
-    if (existingOrder.rows.length === 0) {
-      return res.status(404).json({
-        error: 'Order not found',
-        message: 'Order with the specified ID does not exist'
-      });
-    }
+    let updateFields = [];
+    let queryParams = [];
+    
+    if (status) {
+      updateFields.push(`status = $${queryParams.length + 1}`);
+      queryParams.push(status);
+    }
+    if (payment_status) {
+      updateFields.push(`payment_status = $${queryParams.length + 1}`);
+      queryParams.push(payment_status);
+    }
 
-    // Build update query
-    let updateFields = [];
-    let queryParams = [];
-    let paramCount = 0;
+    if (updateFields.length === 0) {
+      return res.status(400).json({ error: 'Validation error', message: 'At least one status field (status, payment_status) must be provided.' });
+    }
 
-    if (status !== undefined) {
-      paramCount++;
-      updateFields.push(`status = $${paramCount}`);
-      queryParams.push(status);
-    }
+    queryParams.push(id);
+    const query = `UPDATE orders SET ${updateFields.join(', ')}, updated_at = NOW() WHERE id = $${queryParams.length} RETURNING *`;
+    const result = await pool.query(query, queryParams);
 
-    if (payment_status !== undefined) {
-      paramCount++;
-      updateFields.push(`payment_status = $${paramCount}`);
-      queryParams.push(payment_status);
-    }
-
-    if (updateFields.length === 0) {
-      return res.status(400).json({
-        error: 'Validation error',
-        message: 'At least one status field must be provided for update'
-      });
-    }
-
-    // Add updated_at and order ID
-    paramCount++;
-    updateFields.push(`updated_at = $${paramCount}`);
-    queryParams.push(new Date());
-
-    paramCount++;
-    queryParams.push(id);
-
-    const query = `
-      UPDATE orders 
-      SET ${updateFields.join(', ')}
-      WHERE id = $${paramCount}
-      RETURNING *
-    `;
-
-    const result = await pool.query(query, queryParams);
-
-    res.json({
-      message: 'Order status updated successfully',
-      order: result.rows[0]
-    });
-  } catch (error) {
-    console.error('Update order status error:', error);
-    res.status(500).json({
-      error: 'Server error',
-      message: 'An error occurred while updating the order status'
-    });
-  }
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    res.json({ message: 'Order status updated successfully', order: result.rows[0] });
+  } catch (error) {
+    console.error('Update order status error:', error);
+    res.status(500).json({ error: 'Server error', message: 'An error occurred while updating the order status' });
+  }
 });
 
 module.exports = router;
