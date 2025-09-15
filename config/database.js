@@ -133,6 +133,21 @@ const initializeDatabase = async () => {
         quantity INTEGER NOT NULL,
         price DECIMAL(10,2) NOT NULL,
         subtotal DECIMAL(10,2) NOT NULL
+      )`,
+      
+      // Create contact_messages table
+      `CREATE TABLE IF NOT EXISTS contact_messages (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        email VARCHAR(255) NOT NULL,
+        phone VARCHAR(50),
+        subject VARCHAR(255) NOT NULL,
+        message TEXT NOT NULL,
+        order_number VARCHAR(50),
+        status VARCHAR(50) NOT NULL DEFAULT 'new',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (email, message)
       )`
     ];
 
@@ -157,7 +172,8 @@ const initializeDatabase = async () => {
       `CREATE INDEX IF NOT EXISTS idx_products_image_id ON products(image_id)`,
       `CREATE INDEX IF NOT EXISTS idx_products_category ON products(category)`,
       `CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id)`,
-      `CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id)`
+      `CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_contact_messages_email ON contact_messages(email)`
     ];
 
     for (const indexQuery of indexes) {
