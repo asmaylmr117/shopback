@@ -15,44 +15,56 @@ let routesLoaded = {
   auth: false,
   products: false,
   reviews: false,
-  orders: false
+  orders: false,
+  contact: false // Added to track contact routes
 };
 
- const allowedOrigins = [ 'http://localhost:5173', 'http://localhost:3000', 'https://shopbackco.vercel.app', 'https://yourfrontenddomain.com' ];
-app.use(cors({ origin: function (origin, callback) { if (!origin) return callback(null, true); if (allowedOrigins.indexOf(origin) !== -1) { callback(null, true); } else { callback(new Error('Not allowed by CORS')); } }, methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], credentials: true, allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'] }));
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'https://shopbackco.vercel.app',
+  'https://yourfrontenddomain.com'
+];
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
+}));
 
 app.options('*', cors());
 
-// ======== التعديل الهام: body-parser مشروط ======== //
-// استخدم body-parser لجميع routes باستثناء routes التي تستخدم FormData
+// Body parser middleware
 app.use((req, res, next) => {
-  if (req.originalUrl === '/api/upload/image' && req.method === 'POST') {
-    // تخطي body-parser لـ upload endpoint
-    next();
-  } else if (req.originalUrl === '/api/products/' && req.method === 'POST') {
-    // تخطي body-parser لـ products POST endpoint
-    next();
-  } else if (req.originalUrl.startsWith('/api/products/') && req.method === 'PUT') {
-    // تخطي body-parser لـ products PUT endpoint
+  if (
+    (req.originalUrl === '/api/upload/image' && req.method === 'POST') ||
+    (req.originalUrl === '/api/products/' && req.method === 'POST') ||
+    (req.originalUrl.startsWith('/api/products/') && req.method === 'PUT')
+  ) {
     next();
   } else {
-    // استخدام body-parser لباقي الـ endpoints
     express.json({ limit: '10mb' })(req, res, next);
   }
 });
 
 app.use((req, res, next) => {
-  if (req.originalUrl === '/api/upload/image' && req.method === 'POST') {
-    next();
-  } else if (req.originalUrl === '/api/products/' && req.method === 'POST') {
-    next();
-  } else if (req.originalUrl.startsWith('/api/products/') && req.method === 'PUT') {
+  if (
+    (req.originalUrl === '/api/upload/image' && req.method === 'POST') ||
+    (req.originalUrl === '/api/products/' && req.method === 'POST') ||
+    (req.originalUrl.startsWith('/api/products/') && req.method === 'PUT')
+  ) {
     next();
   } else {
     express.urlencoded({ extended: true, limit: '10mb' })(req, res, next);
   }
 });
-// ======== نهاية التعديل ======== //
 
 // Root API endpoint
 app.get('/api', (req, res) => {
@@ -83,7 +95,7 @@ app.get('/api/env-check', (req, res) => {
   });
 });
 
-// Debug endpoint to check file structure
+// Debug endpoint
 app.get('/api/debug', (req, res) => {
   try {
     const currentDir = __dirname;
@@ -194,7 +206,7 @@ app.get('/api/check-tables', async (req, res) => {
   }
 
   try {
-    const tables = ['users', 'products', 'customer_addresses', 'orders', 'order_items', 'reviews', 'product_images'];
+    const tables = ['users', 'products', 'customer_addresses', 'orders', 'order_items', 'reviews', 'product_images', 'contact_messages'];
     const tableStatus = {};
 
     for (const table of tables) {
@@ -225,7 +237,7 @@ app.get('/api/check-tables', async (req, res) => {
   }
 });
 
-// Reinitialize database endpoint (for development only)
+// Reinitialize database endpoint
 app.post('/api/reinit-db', async (req, res) => {
   if (process.env.NODE_ENV !== 'development') {
     return res.status(403).json({
@@ -254,7 +266,7 @@ app.post('/api/reinit-db', async (req, res) => {
   }
 });
 
-// Main health check (root)
+// Main health check
 app.get('/', (req, res) => {
   res.json({ 
     message: 'E-commerce API Server is running on Vercel!',
@@ -269,7 +281,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// Test endpoint for basic functionality
+// Test endpoint
 app.get('/api/test', (req, res) => {
   res.json({
     message: 'Test endpoint working',
@@ -280,7 +292,7 @@ app.get('/api/test', (req, res) => {
   });
 });
 
-// Image upload endpoint using busboy (works on Vercel)
+// Image upload endpoint
 app.post('/api/upload/image', (req, res) => {
   try {
     console.log('📤 Received upload request');
@@ -333,7 +345,6 @@ app.post('/api/upload/image', (req, res) => {
           });
         }
 
-        // Validate file type
         if (!mimeType.startsWith('image/')) {
           console.log('❌ Invalid file type:', mimeType);
           return res.status(400).json({
@@ -342,7 +353,6 @@ app.post('/api/upload/image', (req, res) => {
           });
         }
 
-        // Validate file size (4.5MB limit)
         if (fileSize > 4.5 * 1024 * 1024) {
           console.log('❌ File too large:', fileSize);
           return res.status(400).json({
@@ -351,7 +361,6 @@ app.post('/api/upload/image', (req, res) => {
           });
         }
 
-        // Test database connection
         await pool.query('SELECT 1');
 
         const result = await pool.query(
@@ -409,7 +418,6 @@ app.get('/api/image/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    // Test database connection
     await pool.query('SELECT 1');
 
     const result = await pool.query(
@@ -426,7 +434,6 @@ app.get('/api/image/:id', async (req, res) => {
 
     const { image_data, mime_type } = result.rows[0];
     
-    // Set appropriate headers
     res.set('Content-Type', mime_type);
     res.set('Cache-Control', 'public, max-age=31536000');
     res.set('Content-Length', image_data.length);
@@ -485,7 +492,18 @@ try {
   routesLoaded.orders = false;
 }
 
-// Health check endpoint with detailed status
+// Contact Routes
+try {
+  const contactRoutes = require('./routes/contact');
+  app.use('/api/contact', contactRoutes);
+  routesLoaded.contact = true;
+  console.log('✅ Contact routes loaded successfully');
+} catch (contactError) {
+  console.error('❌ Failed to load contact routes:', contactError.message);
+  routesLoaded.contact = false;
+}
+
+// Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({ 
     message: 'E-commerce API Server is running on Vercel!',
@@ -513,7 +531,8 @@ app.get('/api/health', (req, res) => {
       image: '/api/image/:id',
       debug: '/api/debug',
       health: '/api/health',
-      tableCheck: '/api/check-tables'
+      tableCheck: '/api/check-tables',
+      contact: '/api/contact'
     },
     timestamp: new Date().toISOString()
   });
@@ -523,7 +542,6 @@ app.get('/api/health', (req, res) => {
 app.use((error, req, res, next) => {
   console.error('Unhandled error occurred:', error);
   
-  // معالجة أخطاء busboy الخاصة
   if (error.message.includes('Failed to parse form data')) {
     return res.status(400).json({
       error: 'Invalid request',
@@ -559,7 +577,8 @@ app.use('*', (req, res) => {
       '/api/debug',
       '/api/env-check',
       '/api/db-test',
-      '/api/check-tables'
+      '/api/check-tables',
+      '/api/contact'
     ]
   });
 });
@@ -567,12 +586,10 @@ app.use('*', (req, res) => {
 // Initialize application
 async function initializeApp() {
   try {
-    // Load database config
     const database = require('./config/database');
     pool = database.pool;
     console.log('✅ Database config loaded successfully');
     
-    // Initialize database tables - WAIT for completion
     if (database.initializeDatabase) {
       console.log('🔄 Initializing database tables...');
       try {
@@ -588,7 +605,6 @@ async function initializeApp() {
     console.error('❌ Failed to load database config:', dbError.message);
   }
 
-  // Load auth middleware with error handling
   try {
     const auth = require('./middleware/auth');
     authenticateToken = auth.authenticateToken;
@@ -600,7 +616,6 @@ async function initializeApp() {
   }
 }
 
-// Start the application
 initializeApp().then(() => {
   console.log('🚀 Application initialization completed');
   console.log('📊 Database initialized:', databaseInitialized);
