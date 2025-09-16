@@ -722,4 +722,52 @@ router.put('/:id/status', authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
+// Delete order (admin only) - BE CAREFUL: This permanently deletes orders
+router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Check if order exists
+    const existingOrder = await pool.query('SELECT * FROM orders WHERE id = $1', [id]);
+    
+    if (existingOrder.rows.length === 0) {
+      return res.status(404).json({
+        error: 'Order not found',
+        message: 'Order with the specified ID does not exist'
+      });
+    }
+
+    // Start transaction to delete order and its items
+    const client = await pool.connect();
+    
+    try {
+      await client.query('BEGIN');
+
+      // First delete order items
+      await client.query('DELETE FROM order_items WHERE order_id = $1', [id]);
+
+      // Then delete the order
+      const result = await client.query('DELETE FROM orders WHERE id = $1 RETURNING *', [id]);
+
+      await client.query('COMMIT');
+
+      res.json({
+        message: 'Order deleted successfully',
+        deletedOrder: result.rows[0]
+      });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Delete order error:', error);
+    res.status(500).json({
+      error: 'Server error',
+      message: 'An error occurred while deleting the order'
+    });
+  }
+});
+
 module.exports = router;
