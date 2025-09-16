@@ -23,7 +23,7 @@ const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:3000',
   'https://shopbackco.vercel.app',
-  'https://yourfrontenddomain.com'
+  'https://shop-co-front.vercel.app/'
 ];
 app.use(cors({
   origin: function (origin, callback) {
